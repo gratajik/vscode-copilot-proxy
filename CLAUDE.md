@@ -122,5 +122,19 @@ Use ISO 8601 with timezone: `YYYY-MM-DD HH:MM:SS UTC-X`
 
 ## Documentation
 
-- Completion docs go in `docs/<feature>/completion/`
+### File Locations
+
+- Feature docs: `docs/features/<feature-name>/`
+  - `design.md` - Feature design document
+  - `TASKS.md` - Task tracking for the feature
+- Completion docs: `docs/features/<feature-name>/completion/`
 - DOCX conversion: use `scripts/md-to-docx.ps1`, output placed with source MD file
+
+### Creating New Features
+
+When creating documentation for a new feature:
+
+1. Create directory: `docs/features/<feature-name>/`
+2. Add `design.md` with architecture and requirements
+3. Add `TASKS.md` with phased task breakdown
+4. Never place feature TASKS.md in project root
