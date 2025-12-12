@@ -7,7 +7,20 @@ let outputChannel: vscode.OutputChannel | undefined;
 let statusPanel: vscode.WebviewPanel | undefined;
 
 function log(message: string): void {
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] ${message}`;
     console.log(`[Copilot Proxy] ${message}`);
+    outputChannel?.appendLine(formatted);
+}
+
+function logError(message: string, error?: unknown): void {
+    const timestamp = new Date().toLocaleTimeString();
+    const errorDetails = error instanceof Error ? error.message : String(error ?? '');
+    const formatted = errorDetails
+        ? `[${timestamp}] ERROR: ${message} - ${errorDetails}`
+        : `[${timestamp}] ERROR: ${message}`;
+    console.error(`[Copilot Proxy] ERROR: ${message}`, error);
+    outputChannel?.appendLine(formatted);
 }
 
 interface ChatMessage {
@@ -84,7 +97,7 @@ async function refreshModels(): Promise<vscode.LanguageModelChat[]> {
         log(`Found ${cachedModels.length} models`);
         return cachedModels;
     } catch (error) {
-        log(`Failed to refresh models: ${error}`);
+        logError('Failed to refresh models', error);
         return cachedModels; // Return existing cache on error
     } finally {
         isRefreshing = false;
@@ -151,7 +164,15 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
             const request: ChatCompletionRequest = JSON.parse(body);
             const model = await getModel(request.model);
 
+            // Calculate context size
+            const messageCount = request.messages.length;
+            const totalChars = request.messages.reduce((sum, m) => sum + m.content.length, 0);
+            const estimatedTokens = Math.ceil(totalChars / 4); // rough estimate: ~4 chars per token
+
+            log(`Request: ${messageCount} messages, ~${totalChars} chars (~${estimatedTokens} tokens), model: ${request.model || 'default'}, stream: ${request.stream ?? false}`);
+
             if (!model) {
+                logError('No language models available');
                 res.writeHead(503, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     error: {
@@ -162,6 +183,8 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 }));
                 return;
             }
+
+            log(`Using model: ${model.name} (${model.id}), max input: ${model.maxInputTokens} tokens`);
 
             const vsCodeMessages = convertToVSCodeMessages(request.messages);
 
@@ -202,7 +225,9 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     res.write(`data: ${JSON.stringify(initialChunk)}\n\n`);
 
                     // Stream content chunks
+                    let responseChars = 0;
                     for await (const chunk of response.text) {
+                        responseChars += chunk.length;
                         const streamChunk: StreamChunk = {
                             id,
                             object: 'chat.completion.chunk',
@@ -232,7 +257,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
                     res.write('data: [DONE]\n\n');
                     res.end();
+
+                    const responseTokens = Math.ceil(responseChars / 4);
+                    log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)`);
                 } catch (error) {
+                    logError('Streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                     res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
                     res.end();
@@ -249,6 +278,9 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     for await (const chunk of response.text) {
                         content += chunk;
                     }
+
+                    const responseTokens = Math.ceil(content.length / 4);
+                    log(`Response: ~${content.length} chars (~${responseTokens} tokens)`);
 
                     const openAIResponse: OpenAIResponse = {
                         id: generateId(),
@@ -276,6 +308,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     });
                     res.end(JSON.stringify(openAIResponse));
                 } catch (error) {
+                    logError('Non-streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
@@ -291,6 +324,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 }
             }
         } catch (error) {
+            logError('Invalid request', error);
             const errorMessage = error instanceof Error ? error.message : 'Invalid JSON';
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -394,8 +428,16 @@ async function startServer(): Promise<void> {
 
     server = createServer(port);
 
-    server.listen(port, () => {
+    server.listen(port, async () => {
         log(`Server started on port ${port}`);
+        log(`Endpoint: http://localhost:${port}/v1/chat/completions`);
+
+        // Log available models after server starts
+        const models = await refreshModels();
+        for (const m of models) {
+            log(`  Model: ${m.name} (${m.id}) - max ${m.maxInputTokens} tokens`);
+        }
+
         vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
         updateStatusBar(port);
         updateStatusPanel();
@@ -403,8 +445,10 @@ async function startServer(): Promise<void> {
 
     server.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code === 'EADDRINUSE') {
+            logError(`Port ${port} is already in use`);
             vscode.window.showErrorMessage(`Port ${port} is already in use. Change the port in settings.`);
         } else {
+            logError('Failed to start server', error);
             vscode.window.showErrorMessage(`Failed to start server: ${error.message}`);
         }
         server = null;
@@ -824,11 +868,13 @@ function updateStatusPanel(): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    log('Extension activating...');
-
-    // Create output channel
+    // Create output channel first so log() works
     outputChannel = vscode.window.createOutputChannel('Copilot Proxy');
     context.subscriptions.push(outputChannel);
+    outputChannel.show(true); // Show output channel on startup (preserveFocus: true)
+
+    log('=== Copilot Proxy Starting ===');
+    log(`Extension version: ${context.extension.packageJSON.version || 'unknown'}`);
 
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
