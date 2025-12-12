@@ -2,15 +2,15 @@
 
 > **Turn your GitHub Copilot subscription into an OpenAI-compatible API** — Use any Copilot model with your favorite AI tools, frameworks, and applications without leaving VS Code.
 
-<p align="center">
-  <img src="images/Copilot%20Proxy.png" alt="Copilot Proxy" width="600">
-</p>
-
 ## About
 
 Copilot Proxy is a VS Code extension that exposes GitHub Copilot's language models through a local OpenAI-compatible API server. This lets you leverage your existing Copilot subscription to power external applications, scripts, and tools — no additional API costs, just your Copilot subscription.
 
 Perfect for developers who want to use Copilot's models in custom workflows, automation scripts, or with tools that expect an OpenAI-compatible endpoint.
+
+<p align="center">
+  <img src="images/Copilot%20Proxy.png" alt="Copilot Proxy" width="600">
+</p>
 
 ## Features
 
