@@ -6,6 +6,23 @@
             "type": "extensionHost",
             "request": "launch",
             "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "--disable-extensions",
+                "--disable-gpu",
+                "--new-window",
+                "--skip-welcome",
+                "--skip-release-notes"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"
+            ],
+            "preLaunchTask": "${defaultBuildTask}"
+        },
+        {
+            "name": "Run Extension (with other extensions)",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}"
             ],
             "outFiles": [

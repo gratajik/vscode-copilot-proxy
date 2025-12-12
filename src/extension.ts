@@ -2,7 +2,12 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 
 let server: http.Server | null = null;
-let statusBarItem: vscode.StatusBarItem;
+let statusBarItem: vscode.StatusBarItem | undefined;
+let outputChannel: vscode.OutputChannel | undefined;
+
+function log(message: string): void {
+    console.log(`[Copilot Proxy] ${message}`);
+}
 
 interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
@@ -55,13 +60,33 @@ interface StreamChunk {
 // Cache for available models
 let cachedModels: vscode.LanguageModelChat[] = [];
 
+let isRefreshing = false;
+
 async function refreshModels(): Promise<vscode.LanguageModelChat[]> {
+    // Prevent concurrent refreshes
+    if (isRefreshing) {
+        log('Model refresh already in progress, skipping');
+        return cachedModels;
+    }
+
+    isRefreshing = true;
+    log('Starting model refresh...');
+
     try {
-        cachedModels = await vscode.lm.selectChatModels({});
+        // Add timeout to prevent hanging if Copilot isnt ready
+        const timeoutMs = 5000;
+        const modelsPromise = vscode.lm.selectChatModels({});
+        const timeoutPromise = new Promise<vscode.LanguageModelChat[]>((_, reject) =>
+            setTimeout(() => reject(new Error('Model refresh timed out')), timeoutMs)
+        );
+        cachedModels = await Promise.race([modelsPromise, timeoutPromise]);
+        log(`Found ${cachedModels.length} models`);
         return cachedModels;
     } catch (error) {
-        console.error('Failed to refresh models:', error);
-        return [];
+        log(`Failed to refresh models: ${error}`);
+        return cachedModels; // Return existing cache on error
+    } finally {
+        isRefreshing = false;
     }
 }
 
@@ -71,7 +96,7 @@ async function getModel(requestedModel?: string): Promise<vscode.LanguageModelCh
     }
 
     if (!requestedModel || requestedModel === '') {
-        const config = vscode.workspace.getConfiguration('llmProxy');
+        const config = vscode.workspace.getConfiguration('copilotProxy');
         const defaultModel = config.get<string>('defaultModel', '');
         requestedModel = defaultModel || undefined;
     }
@@ -139,6 +164,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
             const vsCodeMessages = convertToVSCodeMessages(request.messages);
 
+            // Create cancellation token with timeout (5 min default)
+            const timeoutMs = 300000;
+            const cancellationSource = new vscode.CancellationTokenSource();
+            const timeoutId = setTimeout(() => cancellationSource.cancel(), timeoutMs);
+
             const options: vscode.LanguageModelChatRequestOptions = {};
 
             if (request.stream) {
@@ -154,7 +184,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 const created = Math.floor(Date.now() / 1000);
 
                 try {
-                    const response = await model.sendRequest(vsCodeMessages, options);
+                    const response = await model.sendRequest(vsCodeMessages, options, cancellationSource.token);
 
                     // Send initial chunk with role
                     const initialChunk: StreamChunk = {
@@ -205,11 +235,14 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                     res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
                     res.end();
+                } finally {
+                    clearTimeout(timeoutId);
+                    cancellationSource.dispose();
                 }
             } else {
                 // Non-streaming response
                 try {
-                    const response = await model.sendRequest(vsCodeMessages, options);
+                    const response = await model.sendRequest(vsCodeMessages, options, cancellationSource.token);
 
                     let content = '';
                     for await (const chunk of response.text) {
@@ -251,6 +284,9 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                             code: 500
                         }
                     }));
+                } finally {
+                    clearTimeout(timeoutId);
+                    cancellationSource.dispose();
                 }
             }
         } catch (error) {
@@ -322,7 +358,7 @@ function createServer(port: number): http.Server {
 
         const url = req.url || '';
 
-        console.log(`[LLM Proxy] ${req.method} ${url}`);
+        log(`${req.method} ${url}`);
 
         if (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/chat/completions')) {
             await handleChatCompletion(req, res);
@@ -345,21 +381,21 @@ function createServer(port: number): http.Server {
 
 async function startServer(): Promise<void> {
     if (server) {
-        vscode.window.showInformationMessage('LLM Proxy server is already running');
+        vscode.window.showInformationMessage('Copilot Proxy server is already running');
         return;
     }
 
-    const config = vscode.workspace.getConfiguration('llmProxy');
+    const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get<number>('port', 8080);
 
     // Refresh models before starting
-    await refreshModels();
+    refreshModels(); // Non-blocking
 
     server = createServer(port);
 
     server.listen(port, () => {
-        console.log(`[LLM Proxy] Server started on port ${port}`);
-        vscode.window.showInformationMessage(`LLM Proxy server started on port ${port}`);
+        log(`Server started on port ${port}`);
+        vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
         updateStatusBar(port);
     });
 
@@ -377,34 +413,35 @@ async function startServer(): Promise<void> {
 function stopServer(): void {
     if (server) {
         server.close(() => {
-            console.log('[LLM Proxy] Server stopped');
-            vscode.window.showInformationMessage('LLM Proxy server stopped');
+            log('Server stopped');
+            vscode.window.showInformationMessage('Copilot Proxy server stopped');
         });
         server = null;
         updateStatusBar();
     } else {
-        vscode.window.showInformationMessage('LLM Proxy server is not running');
+        vscode.window.showInformationMessage('Copilot Proxy server is not running');
     }
 }
 
 function updateStatusBar(port?: number): void {
+    if (!statusBarItem) return;
     if (port) {
-        statusBarItem.text = `$(radio-tower) LLM Proxy: ${port}`;
-        statusBarItem.tooltip = `LLM Proxy running on port ${port}\n${cachedModels.length} model(s) available\nClick to show status`;
+        statusBarItem.text = `$(radio-tower) Copilot Proxy: ${port}`;
+        statusBarItem.tooltip = `Copilot Proxy running on port ${port}\n${cachedModels.length} model(s) available\nClick to show status`;
     } else {
-        statusBarItem.text = `$(circle-slash) LLM Proxy: Off`;
-        statusBarItem.tooltip = 'LLM Proxy is not running\nClick to show status';
+        statusBarItem.text = `$(circle-slash) Copilot Proxy: Off`;
+        statusBarItem.tooltip = 'Copilot Proxy is not running\nClick to show status';
     }
 }
 
 async function showStatus(): Promise<void> {
     await refreshModels();
 
-    const config = vscode.workspace.getConfiguration('llmProxy');
+    const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get<number>('port', 8080);
     const isRunning = server !== null;
 
-    let message = `LLM Proxy Status\n\n`;
+    let message = `Copilot Proxy Status\n\n`;
     message += `Server: ${isRunning ? `Running on port ${port}` : 'Stopped'}\n`;
     message += `Available Models: ${cachedModels.length}\n\n`;
 
@@ -439,38 +476,41 @@ async function showStatus(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    console.log('[LLM Proxy] Extension activating...');
+    log('Extension activating...');
+
+    // Create output channel
+    outputChannel = vscode.window.createOutputChannel('Copilot Proxy');
+    context.subscriptions.push(outputChannel);
 
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'llm-proxy.status';
+    statusBarItem.command = 'copilot-proxy.status';
+    statusBarItem.text = '$(circle-slash) Copilot Proxy: Off';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
     // Register commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('llm-proxy.start', startServer),
-        vscode.commands.registerCommand('llm-proxy.stop', stopServer),
-        vscode.commands.registerCommand('llm-proxy.status', showStatus)
+        vscode.commands.registerCommand('copilot-proxy.start', startServer),
+        vscode.commands.registerCommand('copilot-proxy.stop', stopServer),
+        vscode.commands.registerCommand('copilot-proxy.status', showStatus)
     );
 
     // Listen for model changes
     context.subscriptions.push(
         vscode.lm.onDidChangeChatModels(() => {
-            console.log('[LLM Proxy] Chat models changed, refreshing...');
+            log('Chat models changed, refreshing...');
             refreshModels();
         })
     );
 
     // Auto-start if configured
-    const config = vscode.workspace.getConfiguration('llmProxy');
+    const config = vscode.workspace.getConfiguration('copilotProxy');
     if (config.get<boolean>('autoStart', true)) {
         startServer();
-    } else {
-        updateStatusBar();
     }
 
-    console.log('[LLM Proxy] Extension activated');
+    log('Extension activated');
 }
 
 export function deactivate(): void {
@@ -478,5 +518,5 @@ export function deactivate(): void {
         server.close();
         server = null;
     }
-    console.log('[LLM Proxy] Extension deactivated');
+    log('Extension deactivated');
 }

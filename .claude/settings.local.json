@@ -12,7 +12,9 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(head:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(node -e:*)",
+      "Bash(vsce package:*)"
     ]
   }
 }

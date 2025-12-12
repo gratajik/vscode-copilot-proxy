@@ -1,6 +1,7 @@
 {
-  "name": "llm-proxy",
-  "displayName": "LLM Proxy",
+  "name": "vscode-copilot-proxy",
+  "displayName": "VS Code Copilot Proxy",
+  "publisher": "local",
   "description": "Proxy requests from external agents through VS Code Copilot models",
   "version": "0.0.1",
   "engines": {
@@ -16,32 +17,32 @@
   "contributes": {
     "commands": [
       {
-        "command": "llm-proxy.start",
-        "title": "LLM Proxy: Start Server"
+        "command": "copilot-proxy.start",
+        "title": "Copilot Proxy: Start Server"
       },
       {
-        "command": "llm-proxy.stop",
-        "title": "LLM Proxy: Stop Server"
+        "command": "copilot-proxy.stop",
+        "title": "Copilot Proxy: Stop Server"
       },
       {
-        "command": "llm-proxy.status",
-        "title": "LLM Proxy: Show Status"
+        "command": "copilot-proxy.status",
+        "title": "Copilot Proxy: Show Status"
       }
     ],
     "configuration": {
-      "title": "LLM Proxy",
+      "title": "Copilot Proxy",
       "properties": {
-        "llmProxy.port": {
+        "copilotProxy.port": {
           "type": "number",
           "default": 8080,
           "description": "Port number for the proxy server"
         },
-        "llmProxy.autoStart": {
+        "copilotProxy.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Automatically start the server when VS Code launches"
         },
-        "llmProxy.defaultModel": {
+        "copilotProxy.defaultModel": {
           "type": "string",
           "default": "",
           "description": "Default model to use when not specified in request (leave empty to use first available)"
