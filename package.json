@@ -1,0 +1,68 @@
+{
+  "name": "llm-proxy",
+  "displayName": "LLM Proxy",
+  "description": "Proxy requests from external agents through VS Code Copilot models",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "llm-proxy.start",
+        "title": "LLM Proxy: Start Server"
+      },
+      {
+        "command": "llm-proxy.stop",
+        "title": "LLM Proxy: Stop Server"
+      },
+      {
+        "command": "llm-proxy.status",
+        "title": "LLM Proxy: Show Status"
+      }
+    ],
+    "configuration": {
+      "title": "LLM Proxy",
+      "properties": {
+        "llmProxy.port": {
+          "type": "number",
+          "default": 8080,
+          "description": "Port number for the proxy server"
+        },
+        "llmProxy.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the server when VS Code launches"
+        },
+        "llmProxy.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model to use when not specified in request (leave empty to use first available)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {}
+}

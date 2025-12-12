@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run compile:*)",
+      "Bash(mkdir:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(for f in F:/ratajik/software/LLMProxy/.claude/prompts/**/*.md)",
+      "Bash(do if head -1 \"$f\")",
+      "Bash(then echo \"$f\")",
+      "Bash(fi)",
+      "Bash(done)",
+      "Bash(head:*)"
+    ]
+  }
+}
