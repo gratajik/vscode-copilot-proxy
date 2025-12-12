@@ -193,3 +193,4 @@ When creating documentation for a new feature:
 2. Add `design.md` with architecture and requirements
 3. Add `TASKS.md` with phased task breakdown
 4. Never place feature TASKS.md in project root
+- REmember - debugging does NOT Work - instead, always rebuild and reinstall

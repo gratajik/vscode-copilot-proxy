@@ -14,7 +14,8 @@
       "Bash(head:*)",
       "Bash(cat:*)",
       "Bash(node -e:*)",
-      "Bash(vsce package:*)"
+      "Bash(vsce package:*)",
+      "Bash(code --install-extension:*)"
     ]
   }
 }

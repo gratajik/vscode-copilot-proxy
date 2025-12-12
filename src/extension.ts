@@ -4,6 +4,7 @@ import * as http from 'http';
 let server: http.Server | null = null;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let statusPanel: vscode.WebviewPanel | undefined;
 
 function log(message: string): void {
     console.log(`[Copilot Proxy] ${message}`);
@@ -397,6 +398,7 @@ async function startServer(): Promise<void> {
         log(`Server started on port ${port}`);
         vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
         updateStatusBar(port);
+        updateStatusPanel();
     });
 
     server.on('error', (error: NodeJS.ErrnoException) => {
@@ -407,6 +409,7 @@ async function startServer(): Promise<void> {
         }
         server = null;
         updateStatusBar();
+        updateStatusPanel();
     });
 }
 
@@ -418,6 +421,7 @@ function stopServer(): void {
         });
         server = null;
         updateStatusBar();
+        updateStatusPanel();
     } else {
         vscode.window.showInformationMessage('Copilot Proxy server is not running');
     }
@@ -434,6 +438,321 @@ function updateStatusBar(port?: number): void {
     }
 }
 
+interface ModelInfo {
+    id: string;
+    name: string;
+    family: string;
+    vendor: string;
+    maxInputTokens: number;
+}
+
+function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]): string {
+    const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
+    const statusText = isRunning ? `Running on port ${port}` : 'Stopped';
+    const buttonText = isRunning ? 'Stop Server' : 'Start Server';
+    const buttonCommand = isRunning ? 'stop' : 'start';
+
+    const modelCards = models.map(model => `
+        <div class="model-card">
+            <div class="model-name">${escapeHtml(model.name)}</div>
+            <div class="model-meta">
+                <span class="model-id">${escapeHtml(model.id)}</span>
+                <span class="separator">-</span>
+                <span class="model-vendor">${escapeHtml(model.vendor)}</span>
+            </div>
+            <div class="model-details">
+                <span class="detail-label">Family:</span> ${escapeHtml(model.family)}
+                <span class="separator">|</span>
+                <span class="detail-label">Max tokens:</span> ${model.maxInputTokens.toLocaleString()}
+            </div>
+        </div>
+    `).join('');
+
+    const endpoints = isRunning ? `
+        <div class="section">
+            <div class="section-header">Endpoints</div>
+            <div class="endpoints">
+                <div class="endpoint">
+                    <span class="method post">POST</span>
+                    <code>http://localhost:${port}/v1/chat/completions</code>
+                    <button class="copy-btn" data-url="http://localhost:${port}/v1/chat/completions" title="Copy URL">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <code>http://localhost:${port}/v1/models</code>
+                    <button class="copy-btn" data-url="http://localhost:${port}/v1/models" title="Copy URL">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <code>http://localhost:${port}/health</code>
+                    <button class="copy-btn" data-url="http://localhost:${port}/health" title="Copy URL">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    ` : '';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Copilot Proxy Status</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--vscode-widget-border);
+        }
+        .title {
+            font-size: 1.4em;
+            font-weight: 600;
+        }
+        .main-layout {
+            display: flex;
+            gap: 24px;
+        }
+        .left-column {
+            flex: 0 0 280px;
+            min-width: 0;
+        }
+        .right-column {
+            flex: 1;
+            min-width: 0;
+        }
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 16px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-radius: 6px;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: ${statusColor};
+        }
+        .status-text {
+            font-weight: 500;
+        }
+        .action-btn {
+            padding: 8px 16px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .action-btn:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        .section {
+            margin-bottom: 24px;
+        }
+        .section-header {
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--vscode-foreground);
+        }
+        .model-card {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-radius: 6px;
+            border-left: 3px solid var(--vscode-focusBorder);
+        }
+        .model-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .model-meta {
+            font-size: 0.9em;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 4px;
+        }
+        .model-id {
+            font-family: var(--vscode-editor-font-family);
+        }
+        .model-details {
+            font-size: 0.85em;
+            color: var(--vscode-descriptionForeground);
+        }
+        .detail-label {
+            color: var(--vscode-foreground);
+            opacity: 0.8;
+        }
+        .separator {
+            margin: 0 6px;
+            opacity: 0.5;
+        }
+        .endpoints {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .endpoint {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-radius: 6px;
+        }
+        .method {
+            font-size: 0.75em;
+            font-weight: 600;
+            padding: 3px 6px;
+            border-radius: 3px;
+            min-width: 42px;
+            text-align: center;
+        }
+        .method.post {
+            background: #2e7d32;
+            color: #fff;
+        }
+        .method.get {
+            background: #1565c0;
+            color: #fff;
+        }
+        .endpoint code {
+            flex: 1;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 0.9em;
+            color: var(--vscode-textLink-foreground);
+        }
+        .copy-btn {
+            background: transparent;
+            border: none;
+            padding: 4px;
+            cursor: pointer;
+            color: var(--vscode-foreground);
+            opacity: 0.6;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .copy-btn:hover {
+            opacity: 1;
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .copy-btn.copied {
+            color: #4caf50;
+            opacity: 1;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 24px;
+            color: var(--vscode-descriptionForeground);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <span class="title">Copilot Proxy</span>
+        </div>
+
+        <div class="main-layout">
+            <div class="left-column">
+                <div class="section">
+                    <div class="section-header">Models (${models.length})</div>
+                    ${models.length > 0 ? modelCards : '<div class="empty-state">No models available</div>'}
+                </div>
+            </div>
+
+            <div class="right-column">
+                <div class="status-row">
+                    <div class="status-indicator">
+                        <div class="status-dot"></div>
+                        <span class="status-text">${statusText}</span>
+                    </div>
+                    <button class="action-btn" id="actionBtn">${buttonText}</button>
+                </div>
+
+                ${endpoints}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        document.getElementById('actionBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: '${buttonCommand}' });
+        });
+
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const url = btn.dataset.url;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    btn.classList.add('copied');
+                    setTimeout(() => btn.classList.remove('copied'), 1500);
+                } catch (err) {
+                    vscode.postMessage({ command: 'copy', text: url });
+                }
+            });
+        });
+    </script>
+</body>
+</html>`;
+}
+
+function escapeHtml(text: string): string {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 async function showStatus(): Promise<void> {
     await refreshModels();
 
@@ -441,38 +760,67 @@ async function showStatus(): Promise<void> {
     const port = config.get<number>('port', 8080);
     const isRunning = server !== null;
 
-    let message = `Copilot Proxy Status\n\n`;
-    message += `Server: ${isRunning ? `Running on port ${port}` : 'Stopped'}\n`;
-    message += `Available Models: ${cachedModels.length}\n\n`;
+    // If panel already exists, reveal it and update content
+    if (statusPanel) {
+        statusPanel.reveal(vscode.ViewColumn.One);
+        updateStatusPanel();
+        return;
+    }
 
-    if (cachedModels.length > 0) {
-        message += `Models:\n`;
-        for (const model of cachedModels) {
-            message += `  - ${model.name} (${model.id})\n`;
-            message += `    Family: ${model.family}, Vendor: ${model.vendor}\n`;
-            message += `    Max Input Tokens: ${model.maxInputTokens}\n`;
+    // Create new webview panel
+    statusPanel = vscode.window.createWebviewPanel(
+        'copilotProxyStatus',
+        'Copilot Proxy',
+        vscode.ViewColumn.One,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true
         }
-    }
-
-    if (isRunning) {
-        message += `\nEndpoints:\n`;
-        message += `  POST http://localhost:${port}/v1/chat/completions\n`;
-        message += `  GET  http://localhost:${port}/v1/models\n`;
-        message += `  GET  http://localhost:${port}/health\n`;
-    }
-
-    const action = isRunning ? 'Stop Server' : 'Start Server';
-    const result = await vscode.window.showInformationMessage(
-        message,
-        { modal: true },
-        action
     );
 
-    if (result === 'Start Server') {
-        await startServer();
-    } else if (result === 'Stop Server') {
-        stopServer();
-    }
+    // Set initial content
+    updateStatusPanel();
+
+    // Handle messages from webview
+    statusPanel.webview.onDidReceiveMessage(async (message) => {
+        switch (message.command) {
+            case 'start':
+                await startServer();
+                updateStatusPanel();
+                break;
+            case 'stop':
+                stopServer();
+                updateStatusPanel();
+                break;
+            case 'copy':
+                await vscode.env.clipboard.writeText(message.text);
+                vscode.window.showInformationMessage('Copied to clipboard');
+                break;
+        }
+    });
+
+    // Clean up when panel is closed
+    statusPanel.onDidDispose(() => {
+        statusPanel = undefined;
+    });
+}
+
+function updateStatusPanel(): void {
+    if (!statusPanel) return;
+
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const port = config.get<number>('port', 8080);
+    const isRunning = server !== null;
+
+    const models: ModelInfo[] = cachedModels.map(m => ({
+        id: m.id,
+        name: m.name,
+        family: m.family,
+        vendor: m.vendor,
+        maxInputTokens: m.maxInputTokens
+    }));
+
+    statusPanel.webview.html = getWebviewContent(isRunning, port, models);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -517,6 +865,10 @@ export function deactivate(): void {
     if (server) {
         server.close();
         server = null;
+    }
+    if (statusPanel) {
+        statusPanel.dispose();
+        statusPanel = undefined;
     }
     log('Extension deactivated');
 }
