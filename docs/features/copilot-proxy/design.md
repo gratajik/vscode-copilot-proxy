@@ -1,8 +1,8 @@
-# LLM Proxy - Feature Design Document
+# VS Code Copilot Proxy - Feature Design Document
 
 ## Overview
 
-LLM Proxy is a VS Code extension that exposes VS Code's Language Model API (used by GitHub Copilot) as an OpenAI-compatible HTTP server. This enables external applications, agents, and tools to leverage Copilot's language models without direct API access or additional costs.
+VS Code Copilot Proxy is a VS Code extension that exposes VS Code's Language Model API (used by GitHub Copilot) as an OpenAI-compatible HTTP server. This enables external applications, agents, and tools to leverage Copilot's language models without direct API access or additional costs.
 
 ## Problem Statement
 
@@ -40,7 +40,7 @@ This allows any OpenAI-compatible client to use Copilot models at no additional 
                               │ HTTP (port 8080)
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      LLM Proxy Extension                        │
+│                    Copilot Proxy Extension                      │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                     HTTP Server                           │  │
 │  │  ┌─────────────────┐  ┌─────────────────┐  ┌───────────┐  │  │
@@ -249,9 +249,9 @@ res.writeHead(200, {
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `llmProxy.port` | number | 8080 | HTTP server port |
-| `llmProxy.autoStart` | boolean | true | Start server on VS Code launch |
-| `llmProxy.defaultModel` | string | "" | Default model when not specified |
+| `copilotProxy.port` | number | 8080 | HTTP server port |
+| `copilotProxy.autoStart` | boolean | true | Start server on VS Code launch |
+| `copilotProxy.defaultModel` | string | "" | Default model when not specified |
 
 ## Extension Lifecycle
 
@@ -290,9 +290,9 @@ The extension displays a status bar item showing:
 
 | Command | Description |
 |---------|-------------|
-| `llm-proxy.start` | Start the proxy server |
-| `llm-proxy.stop` | Stop the proxy server |
-| `llm-proxy.status` | Show detailed status modal |
+| `copilot-proxy.start` | Start the proxy server |
+| `copilot-proxy.stop` | Stop the proxy server |
+| `copilot-proxy.status` | Show detailed status modal |
 
 ## Error Handling
 
@@ -395,7 +395,7 @@ Test with common OpenAI clients:
 ## File Structure
 
 ```
-llm-proxy/
+vscode-copilot-proxy/
 ├── package.json           # Extension manifest
 ├── tsconfig.json          # TypeScript config
 ├── src/
@@ -406,7 +406,7 @@ llm-proxy/
 │   └── tasks.json         # Build tasks
 ├── docs/
 │   └── features/
-│       └── llm-proxy/
+│       └── copilot-proxy/
 │           └── design.md  # This document
 └── README.md              # User documentation
 ```
