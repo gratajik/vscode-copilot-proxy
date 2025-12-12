@@ -116,17 +116,72 @@ async function getModel(requestedModel?: string): Promise<vscode.LanguageModelCh
     }
 
     if (requestedModel) {
-        // Try exact match first
-        let model = cachedModels.find(m => m.id === requestedModel);
+        const requested = requestedModel.toLowerCase();
+
+        // Try exact match first (case-insensitive)
+        let model = cachedModels.find(m => m.id.toLowerCase() === requested);
         if (model) return model;
 
-        // Try matching by family or name
-        model = cachedModels.find(m =>
-            m.family.toLowerCase().includes(requestedModel!.toLowerCase()) ||
-            m.name.toLowerCase().includes(requestedModel!.toLowerCase()) ||
-            m.id.toLowerCase().includes(requestedModel!.toLowerCase())
-        );
+        // Try exact family match
+        model = cachedModels.find(m => m.family.toLowerCase() === requested);
         if (model) return model;
+
+        // Score-based matching - find the best match, not just the first
+        const keyIdentifiers = ['claude', 'gpt', 'opus', 'sonnet', 'haiku', 'o1', 'o3', 'gemini'];
+
+        // Extract version from request (e.g., "4-5" -> "4.5", "4.1" -> "4.1")
+        const versionMatch = requested.match(/(\d+)[.-](\d+)/);
+        const requestedVersion = versionMatch ? `${versionMatch[1]}.${versionMatch[2]}` : null;
+
+        let bestMatch: vscode.LanguageModelChat | undefined;
+        let bestScore = 0;
+
+        for (const m of cachedModels) {
+            const family = m.family.toLowerCase();
+            const name = m.name.toLowerCase();
+            const id = m.id.toLowerCase();
+            let score = 0;
+
+            // Count how many key identifiers match between request and model
+            for (const key of keyIdentifiers) {
+                const requestHasKey = requested.includes(key);
+                const modelHasKey = family.includes(key) || name.includes(key) || id.includes(key);
+
+                if (requestHasKey && modelHasKey) {
+                    score += 10; // Both have the key - strong match
+                } else if (requestHasKey !== modelHasKey) {
+                    score -= 1; // Mismatch penalty
+                }
+            }
+
+            // Version matching - high priority
+            if (requestedVersion) {
+                const modelStr = `${family} ${name} ${id}`;
+                if (modelStr.includes(requestedVersion)) {
+                    score += 50; // Strong bonus for version match
+                } else {
+                    // Check if model has a different version - penalize
+                    const modelVersionMatch = modelStr.match(/(\d+)\.(\d+)/);
+                    if (modelVersionMatch) {
+                        score -= 20; // Penalty for wrong version
+                    }
+                }
+            }
+
+            // Bonus for family containment
+            if (requested.includes(family) && family.length > 2) {
+                score += 5;
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = m;
+            }
+        }
+
+        if (bestMatch && bestScore > 0) {
+            return bestMatch;
+        }
     }
 
     // Return first available model
@@ -602,7 +657,6 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             display: flex;
             align-items: center;
             gap: 16px;
-            margin-bottom: 24px;
             padding: 16px;
             background: var(--vscode-editor-inactiveSelectionBackground);
             border-radius: 6px;
@@ -634,6 +688,19 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
         }
         .action-btn:hover {
             background: var(--vscode-button-hoverBackground);
+        }
+        .secondary-btn {
+            padding: 6px 12px;
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .secondary-btn:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
         }
         .section {
             margin-bottom: 24px;
@@ -740,6 +807,7 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
     <div class="container">
         <div class="header">
             <span class="title">Copilot Proxy</span>
+            <button class="secondary-btn" id="logsBtn">📋 View Logs</button>
         </div>
 
         <div class="main-layout">
@@ -769,6 +837,10 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
 
         document.getElementById('actionBtn').addEventListener('click', () => {
             vscode.postMessage({ command: '${buttonCommand}' });
+        });
+
+        document.getElementById('logsBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'showLogs' });
         });
 
         document.querySelectorAll('.copy-btn').forEach(btn => {
@@ -839,6 +911,11 @@ async function showStatus(): Promise<void> {
             case 'copy':
                 await vscode.env.clipboard.writeText(message.text);
                 vscode.window.showInformationMessage('Copied to clipboard');
+                break;
+            case 'showLogs':
+                if (outputChannel) {
+                    outputChannel.show(false); // false = focus the output channel
+                }
                 break;
         }
     });

@@ -9,7 +9,7 @@ Copilot Proxy is a VS Code extension that exposes GitHub Copilot's language mode
 Perfect for developers who want to use Copilot's models in custom workflows, automation scripts, or with tools that expect an OpenAI-compatible endpoint.
 
 <p align="center">
-  <img src="images/Copilot%20Proxy.png" alt="Copilot Proxy" width="600">
+  <img src="images/CopilotProxy.png" alt="Copilot Proxy" width="600">
 </p>
 
 ## Features
