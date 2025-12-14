@@ -46,6 +46,16 @@
           "type": "string",
           "default": "",
           "description": "Default model to use when not specified in request (leave empty to use first available)"
+        },
+        "copilotProxy.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host address to bind the server to (127.0.0.1 for localhost only, 0.0.0.0 for all interfaces)"
+        },
+        "copilotProxy.enableWebSocket": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable WebSocket support for streaming (experimental)"
         }
       }
     }
@@ -55,15 +65,19 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test:integration": "node test/integration.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.x",
     "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.5.13",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.56.0",
     "typescript": "^5.3.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
 }

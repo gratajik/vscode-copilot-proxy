@@ -37,7 +37,9 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
+const WebSocket = __importStar(require("ws"));
 let server = null;
+let wsServer = null;
 let statusBarItem;
 let outputChannel;
 let statusPanel;
@@ -55,6 +57,60 @@ function logError(message, error) {
         : `[${timestamp}] ERROR: ${message}`;
     console.error(`[Copilot Proxy] ERROR: ${message}`, error);
     outputChannel?.appendLine(formatted);
+}
+function createErrorResponse(code, message, type, guidance) {
+    return {
+        error: {
+            message,
+            type,
+            code,
+            ...(guidance && { guidance })
+        }
+    };
+}
+function getErrorGuidance(error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const lowerMessage = errorMessage.toLowerCase();
+    if (lowerMessage.includes('model') && lowerMessage.includes('not found')) {
+        return {
+            message: errorMessage,
+            guidance: 'Check available models at GET /v1/models. The requested model may not be available in your Copilot subscription.'
+        };
+    }
+    if (lowerMessage.includes('unauthorized') || lowerMessage.includes('401')) {
+        return {
+            message: errorMessage,
+            guidance: 'GitHub Copilot authentication may have expired. Try signing out and back into GitHub in VS Code.'
+        };
+    }
+    if (lowerMessage.includes('rate limit') || lowerMessage.includes('429')) {
+        return {
+            message: errorMessage,
+            guidance: 'Rate limit exceeded. Wait a moment before retrying. Consider reducing request frequency.'
+        };
+    }
+    if (lowerMessage.includes('timeout') || lowerMessage.includes('timed out')) {
+        return {
+            message: errorMessage,
+            guidance: 'Request timed out. The model may be overloaded. Try again or use a smaller context.'
+        };
+    }
+    if (lowerMessage.includes('context') || lowerMessage.includes('token')) {
+        return {
+            message: errorMessage,
+            guidance: 'Context may be too large. Try reducing the number of messages or message length.'
+        };
+    }
+    if (lowerMessage.includes('canceled') || lowerMessage.includes('cancelled')) {
+        return {
+            message: errorMessage,
+            guidance: 'Request was cancelled. This may be due to timeout or client disconnect.'
+        };
+    }
+    return {
+        message: errorMessage,
+        guidance: 'An unexpected error occurred. Check the Copilot Proxy output channel for details.'
+    };
 }
 // Cache for available models
 let cachedModels = [];
@@ -187,16 +243,14 @@ async function handleChatCompletion(req, res) {
             const totalChars = request.messages.reduce((sum, m) => sum + m.content.length, 0);
             const estimatedTokens = Math.ceil(totalChars / 4); // rough estimate: ~4 chars per token
             log(`Request: ${messageCount} messages, ~${totalChars} chars (~${estimatedTokens} tokens), model: ${request.model || 'default'}, stream: ${request.stream ?? false}`);
+            // Warn about tool/function calling (not supported by VS Code API)
+            if (request.tools && request.tools.length > 0) {
+                log(`Warning: Request includes ${request.tools.length} tool(s), but VS Code LM API does not support tool/function calling. Tools will be ignored.`);
+            }
             if (!model) {
                 logError('No language models available');
                 res.writeHead(503, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    error: {
-                        message: 'No language models available. Make sure GitHub Copilot is installed and authenticated.',
-                        type: 'service_unavailable',
-                        code: 503
-                    }
-                }));
+                res.end(JSON.stringify(createErrorResponse(503, 'No language models available', 'service_unavailable', 'Make sure GitHub Copilot is installed and authenticated. Check VS Code settings and ensure Copilot extension is enabled.')));
                 return;
             }
             log(`Using model: ${model.name} (${model.id}), max input: ${model.maxInputTokens} tokens`);
@@ -268,8 +322,8 @@ async function handleChatCompletion(req, res) {
                 }
                 catch (error) {
                     logError('Streaming request failed', error);
-                    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                    res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+                    const { message, guidance } = getErrorGuidance(error);
+                    res.write(`data: ${JSON.stringify({ error: message, guidance })}\n\n`);
                     res.end();
                 }
                 finally {
@@ -314,15 +368,9 @@ async function handleChatCompletion(req, res) {
                 }
                 catch (error) {
                     logError('Non-streaming request failed', error);
-                    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                    const { message, guidance } = getErrorGuidance(error);
                     res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
-                        error: {
-                            message: errorMessage,
-                            type: 'server_error',
-                            code: 500
-                        }
-                    }));
+                    res.end(JSON.stringify(createErrorResponse(500, message, 'server_error', guidance)));
                 }
                 finally {
                     clearTimeout(timeoutId);
@@ -334,13 +382,7 @@ async function handleChatCompletion(req, res) {
             logError('Invalid request', error);
             const errorMessage = error instanceof Error ? error.message : 'Invalid JSON';
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: errorMessage,
-                    type: 'invalid_request_error',
-                    code: 400
-                }
-            }));
+            res.end(JSON.stringify(createErrorResponse(400, errorMessage, 'invalid_request_error', 'Ensure the request body is valid JSON with a "messages" array. See OpenAI API documentation for format.')));
         }
     });
 }
@@ -422,18 +464,93 @@ async function startServer() {
     }
     const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get('port', 8080);
+    const host = config.get('host', '127.0.0.1');
+    const enableWebSocket = config.get('enableWebSocket', false);
     // Refresh models before starting
     refreshModels(); // Non-blocking
     server = createServer(port);
-    server.listen(port, async () => {
-        log(`Server started on port ${port}`);
-        log(`Endpoint: http://localhost:${port}/v1/chat/completions`);
+    server.listen(port, host, async () => {
+        log(`Server started on ${host}:${port}`);
+        log(`Endpoint: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/v1/chat/completions`);
+        // Start WebSocket server if enabled
+        if (enableWebSocket && server) {
+            wsServer = new WebSocket.Server({ server });
+            log(`WebSocket enabled on ws://${host === '0.0.0.0' ? 'localhost' : host}:${port}/v1/chat/completions`);
+            wsServer.on('connection', (ws) => {
+                log('WebSocket client connected');
+                ws.on('message', async (data) => {
+                    try {
+                        const request = JSON.parse(data.toString());
+                        const model = await getModel(request.model);
+                        if (!model) {
+                            ws.send(JSON.stringify(createErrorResponse(503, 'No language models available', 'service_unavailable', 'Make sure GitHub Copilot is installed and authenticated.')));
+                            return;
+                        }
+                        // Warn about tools
+                        if (request.tools && request.tools.length > 0) {
+                            log(`Warning: WebSocket request includes ${request.tools.length} tool(s), ignored.`);
+                        }
+                        const vsCodeMessages = convertToVSCodeMessages(request.messages);
+                        const cancellationSource = new vscode.CancellationTokenSource();
+                        const options = {};
+                        const response = await model.sendRequest(vsCodeMessages, options, cancellationSource.token);
+                        const id = generateId();
+                        const created = Math.floor(Date.now() / 1000);
+                        // Send initial chunk
+                        ws.send(JSON.stringify({
+                            id,
+                            object: 'chat.completion.chunk',
+                            created,
+                            model: model.id,
+                            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
+                        }));
+                        // Stream content
+                        for await (const chunk of response.text) {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({
+                                    id,
+                                    object: 'chat.completion.chunk',
+                                    created,
+                                    model: model.id,
+                                    choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
+                                }));
+                            }
+                        }
+                        // Send final chunk
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                id,
+                                object: 'chat.completion.chunk',
+                                created,
+                                model: model.id,
+                                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+                            }));
+                            ws.send('[DONE]');
+                        }
+                        cancellationSource.dispose();
+                    }
+                    catch (error) {
+                        logError('WebSocket request failed', error);
+                        const { message, guidance } = getErrorGuidance(error);
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify(createErrorResponse(500, message, 'server_error', guidance)));
+                        }
+                    }
+                });
+                ws.on('close', () => {
+                    log('WebSocket client disconnected');
+                });
+                ws.on('error', (error) => {
+                    logError('WebSocket error', error);
+                });
+            });
+        }
         // Log available models after server starts
         const models = await refreshModels();
         for (const m of models) {
             log(`  Model: ${m.name} (${m.id}) - max ${m.maxInputTokens} tokens`);
         }
-        vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
+        vscode.window.showInformationMessage(`Copilot Proxy server started on ${host}:${port}`);
         updateStatusBar(port);
         updateStatusPanel();
     });
@@ -452,6 +569,12 @@ async function startServer() {
 }
 function stopServer() {
     if (server) {
+        // Close WebSocket server first
+        if (wsServer) {
+            wsServer.close();
+            wsServer = null;
+            log('WebSocket server stopped');
+        }
         server.close(() => {
             log('Server stopped');
             vscode.window.showInformationMessage('Copilot Proxy server stopped');
@@ -884,6 +1007,10 @@ function activate(context) {
     log('Extension activated');
 }
 function deactivate() {
+    if (wsServer) {
+        wsServer.close();
+        wsServer = null;
+    }
     if (server) {
         server.close();
         server = null;
