@@ -439,8 +439,7 @@ async function startServer() {
     });
     server.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
-            logError(`Port ${port} is already in use`);
-            vscode.window.showErrorMessage(`Port ${port} is already in use. Change the port in settings.`);
+            log(`Port ${port} is already in use (another VS Code instance may be serving)`);
         }
         else {
             logError('Failed to start server', error);
@@ -573,6 +572,7 @@ function getWebviewContent(isRunning, port, models) {
         .main-layout {
             display: flex;
             gap: 24px;
+            align-items: flex-start;
         }
         .left-column {
             flex: 0 0 280px;
