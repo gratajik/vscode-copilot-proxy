@@ -70,6 +70,8 @@ npm run lint         # Run ESLint on src/
 
 Press F5 in VS Code to launch a new Extension Development Host window with the extension loaded. The server auto-starts on port 8080 by default.
 
+NOTE: This may have problems! Default to building and installing the extension. 
+
 ## Testing the API
 
 ```bash

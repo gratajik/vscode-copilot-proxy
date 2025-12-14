@@ -31,18 +31,20 @@ Perfect for developers who want to use Copilot's models in custom workflows, aut
 
 ## Installation
 
-### From Source
+### Manual Install - Preferred
+
+1. Run `npm run compile`
+2. Package with `vsce package` (requires `npm install -g @vscode/vsce`)
+3. Install the generated `.vsix` file in VS Code
+
+### From Source - debugging/launching may not work
 
 1. Clone this repository
 2. Run `npm install`
 3. Run `npm run compile`
 4. Press F5 to launch the extension in a new VS Code window
 
-### Manual Install
 
-1. Run `npm run compile`
-2. Package with `vsce package` (requires `npm install -g @vscode/vsce`)
-3. Install the generated `.vsix` file in VS Code
 
 ## Usage
 
@@ -204,6 +206,21 @@ Settings available in VS Code Settings (search for "Copilot Proxy"):
 | `copilotProxy.defaultModel` | `""` | Default model when not specified in request (leave empty for first available) |
 
 ## Using with External Tools
+
+### Example Script
+
+See [examples/vscode_llm_example.py](examples/vscode_llm_example.py) for a complete working example that demonstrates:
+
+- Making requests to the Copilot Proxy API
+- Handling both streaming and non-streaming responses
+- Listing available models
+- Error handling
+
+Run it with:
+
+```bash
+py examples/vscode_llm_example.py
+```
 
 ### With Python (OpenAI client)
 

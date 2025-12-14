@@ -544,7 +544,13 @@ interface ModelInfo {
     maxInputTokens: number;
 }
 
-function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]): string {
+interface SettingsInfo {
+    port: number;
+    autoStart: boolean;
+    defaultModel: string;
+}
+
+function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[], settings?: SettingsInfo): string {
     const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
     const statusText = isRunning ? `Running on port ${port}` : 'Stopped';
     const buttonText = isRunning ? 'Stop Server' : 'Start Server';
@@ -599,6 +605,33 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                         </svg>
                     </button>
+                </div>
+            </div>
+        </div>
+    ` : '';
+
+    const modelOptions = models.map(m =>
+        `<option value="${escapeHtml(m.id)}" ${settings?.defaultModel === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`
+    ).join('');
+
+    const settingsSection = settings ? `
+        <div class="section">
+            <div class="section-header">Settings</div>
+            <div class="settings-grid">
+                <div class="setting-item">
+                    <label class="setting-label" for="portInput">Port</label>
+                    <input type="number" id="portInput" class="setting-input" value="${settings.port}" min="1" max="65535" />
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label" for="autoStartInput">Auto Start</label>
+                    <input type="checkbox" id="autoStartInput" class="setting-checkbox" ${settings.autoStart ? 'checked' : ''} />
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label" for="defaultModelInput">Default Model</label>
+                    <select id="defaultModelInput" class="setting-select">
+                        <option value="" ${!settings.defaultModel ? 'selected' : ''}>(first available)</option>
+                        ${modelOptions}
+                    </select>
                 </div>
             </div>
         </div>
@@ -801,6 +834,64 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             padding: 24px;
             color: var(--vscode-descriptionForeground);
         }
+        .settings-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-radius: 4px;
+        }
+        .setting-label {
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
+        }
+        .setting-value {
+            font-family: var(--vscode-editor-font-family);
+            color: var(--vscode-foreground);
+        }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .setting-input {
+            width: 80px;
+            padding: 4px 8px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border, transparent);
+            border-radius: 4px;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 13px;
+        }
+        .setting-input:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: -1px;
+        }
+        .setting-select {
+            padding: 4px 8px;
+            background: var(--vscode-dropdown-background);
+            color: var(--vscode-dropdown-foreground);
+            border: 1px solid var(--vscode-dropdown-border, transparent);
+            border-radius: 4px;
+            font-size: 13px;
+            min-width: 150px;
+        }
+        .setting-select:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            outline-offset: -1px;
+        }
+        .setting-checkbox {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--vscode-button-background);
+        }
     </style>
 </head>
 <body>
@@ -819,6 +910,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             </div>
 
             <div class="right-column">
+                ${settingsSection}
+
                 <div class="status-row">
                     <div class="status-indicator">
                         <div class="status-dot"></div>
@@ -842,6 +935,31 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
         document.getElementById('logsBtn').addEventListener('click', () => {
             vscode.postMessage({ command: 'showLogs' });
         });
+
+        // Settings handlers
+        const portInput = document.getElementById('portInput');
+        if (portInput) {
+            portInput.addEventListener('change', (e) => {
+                const value = parseInt(e.target.value, 10);
+                if (value >= 1 && value <= 65535) {
+                    vscode.postMessage({ command: 'updateSetting', key: 'port', value: value });
+                }
+            });
+        }
+
+        const autoStartInput = document.getElementById('autoStartInput');
+        if (autoStartInput) {
+            autoStartInput.addEventListener('change', (e) => {
+                vscode.postMessage({ command: 'updateSetting', key: 'autoStart', value: e.target.checked });
+            });
+        }
+
+        const defaultModelInput = document.getElementById('defaultModelInput');
+        if (defaultModelInput) {
+            defaultModelInput.addEventListener('change', (e) => {
+                vscode.postMessage({ command: 'updateSetting', key: 'defaultModel', value: e.target.value });
+            });
+        }
 
         document.querySelectorAll('.copy-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
@@ -914,8 +1032,18 @@ async function showStatus(): Promise<void> {
                 break;
             case 'showLogs':
                 if (outputChannel) {
-                    outputChannel.show(false); // false = focus the output channel
+                    outputChannel.show(false);
+                    // Also execute command to ensure Output panel is visible and focused
+                    vscode.commands.executeCommand('workbench.action.output.show.extension-output-local.vscode-copilot-proxy-#1-Copilot Proxy');
                 }
+                break;
+            case 'openSettings':
+                vscode.commands.executeCommand('workbench.action.openSettings', 'copilotProxy');
+                break;
+            case 'updateSetting':
+                const config = vscode.workspace.getConfiguration('copilotProxy');
+                await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
+                log(`Setting updated: ${message.key} = ${message.value}`);
                 break;
         }
     });
@@ -931,6 +1059,8 @@ function updateStatusPanel(): void {
 
     const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get<number>('port', 8080);
+    const autoStart = config.get<boolean>('autoStart', true);
+    const defaultModel = config.get<string>('defaultModel', '');
     const isRunning = server !== null;
 
     const models: ModelInfo[] = cachedModels.map(m => ({
@@ -941,7 +1071,13 @@ function updateStatusPanel(): void {
         maxInputTokens: m.maxInputTokens
     }));
 
-    statusPanel.webview.html = getWebviewContent(isRunning, port, models);
+    const settings: SettingsInfo = {
+        port,
+        autoStart,
+        defaultModel
+    };
+
+    statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
