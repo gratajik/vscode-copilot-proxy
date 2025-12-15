@@ -1,7 +1,7 @@
 {
   "name": "vscode-copilot-proxy",
   "displayName": "VS Code Copilot Proxy",
-  "publisher": "local",
+  "publisher": "RatajikSoftware",
   "description": "Proxy requests from external agents through VS Code Copilot models",
   "version": "0.0.2",
   "repository": {
