@@ -317,6 +317,52 @@ Settings available in VS Code Settings (search for "Copilot Proxy"):
 - **System Messages**: VS Code LM API doesn't have a system role - system messages are converted to user messages
 - **Token Counts**: Token counts in responses are always 0 (VS Code API doesn't expose this)
 - **Temperature/Max Tokens**: These parameters are accepted but not forwarded to the underlying API
+- **Request Size**: Maximum request body size is 10MB (requests larger than this will receive a 413 error)
+- **Request Timeout**: Requests timeout after 30 seconds (will receive a 408 error)
+
+## Security
+
+Copilot Proxy is designed for local development use. The following security considerations apply:
+
+### Localhost-Only Binding
+
+The server binds to `127.0.0.1` (localhost) by default. This means:
+
+- Only applications on your local machine can access the proxy
+- The server is not accessible from other devices on your network
+- This is intentional to prevent unauthorized access
+
+### No Authentication
+
+The API does not require authentication because:
+
+- It's designed for trusted local applications only
+- Your Copilot subscription credentials are managed securely by VS Code
+- Adding authentication would add friction without meaningful security benefit in a localhost context
+
+### CORS Configuration
+
+The server allows all origins (`Access-Control-Allow-Origin: *`) because:
+
+- Browser-based local development tools need CORS headers
+- Localhost binding already limits access to local applications
+- Restrictive CORS would break integration with local web tools
+
+### Request Limits
+
+The following limits protect against resource exhaustion:
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Request body size | 10 MB | Prevents memory exhaustion |
+| Request timeout | 30 seconds | Prevents connection exhaustion |
+| Keep-alive timeout | 5 seconds | Manages idle connections |
+
+### Best Practices
+
+- Do not expose the proxy to the network (don't modify binding to `0.0.0.0`)
+- Do not run in production environments
+- The proxy is for development and testing only
 
 ## Troubleshooting
 

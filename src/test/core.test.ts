@@ -15,6 +15,9 @@ import {
     formatLogMessage,
     formatErrorMessage,
     MODEL_KEY_IDENTIFIERS,
+    MAX_REQUEST_BODY_SIZE,
+    REQUEST_TIMEOUT_MS,
+    KEEP_ALIVE_TIMEOUT_MS,
     ChatMessage,
     ChatCompletionRequest
 } from '../core';
@@ -465,6 +468,36 @@ describe('Core Utilities', () => {
             expect(MODEL_KEY_IDENTIFIERS).to.include('sonnet');
             expect(MODEL_KEY_IDENTIFIERS).to.include('haiku');
             expect(MODEL_KEY_IDENTIFIERS).to.include('gemini');
+        });
+    });
+
+    describe('MAX_REQUEST_BODY_SIZE', () => {
+        it('should be 10MB', () => {
+            expect(MAX_REQUEST_BODY_SIZE).to.equal(10 * 1024 * 1024);
+        });
+
+        it('should be a positive number', () => {
+            expect(MAX_REQUEST_BODY_SIZE).to.be.greaterThan(0);
+        });
+    });
+
+    describe('REQUEST_TIMEOUT_MS', () => {
+        it('should be 30 seconds', () => {
+            expect(REQUEST_TIMEOUT_MS).to.equal(30000);
+        });
+
+        it('should be a positive number', () => {
+            expect(REQUEST_TIMEOUT_MS).to.be.greaterThan(0);
+        });
+    });
+
+    describe('KEEP_ALIVE_TIMEOUT_MS', () => {
+        it('should be 5 seconds', () => {
+            expect(KEEP_ALIVE_TIMEOUT_MS).to.equal(5000);
+        });
+
+        it('should be a positive number', () => {
+            expect(KEEP_ALIVE_TIMEOUT_MS).to.be.greaterThan(0);
         });
     });
 });

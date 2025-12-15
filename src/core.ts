@@ -3,6 +3,24 @@
  * These are pure functions that can be easily unit tested.
  */
 
+/**
+ * Maximum allowed request body size (10MB).
+ * Prevents memory exhaustion from oversized requests.
+ */
+export const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Request timeout in milliseconds (30 seconds).
+ * Prevents connection exhaustion from slow requests.
+ */
+export const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * Server keep-alive timeout in milliseconds (5 seconds).
+ * Controls how long to keep idle connections open.
+ */
+export const KEEP_ALIVE_TIMEOUT_MS = 5000;
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -182,7 +200,7 @@ export function findBestModel<T extends { id: string; name: string; family: stri
     }
 
     // Use default if no model specified
-    let requested = requestedModel || defaultModel;
+    const requested = requestedModel || defaultModel;
 
     if (!requested || requested === '') {
         return models[0];

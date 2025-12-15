@@ -1,5 +1,21 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
+import {
+    ChatMessage,
+    OpenAIResponse,
+    StreamChunk,
+    ModelInfo,
+    SettingsInfo,
+    MAX_REQUEST_BODY_SIZE,
+    REQUEST_TIMEOUT_MS,
+    KEEP_ALIVE_TIMEOUT_MS,
+    parseRequestBody,
+    validateRequest,
+    createErrorResponse,
+    generateId,
+    escapeHtml,
+    findBestModel
+} from './core';
 
 let server: http.Server | null = null;
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -23,52 +39,18 @@ function logError(message: string, error?: unknown): void {
     outputChannel?.appendLine(formatted);
 }
 
-interface ChatMessage {
-    role: 'system' | 'user' | 'assistant';
-    content: string;
-}
-
-interface ChatCompletionRequest {
-    model?: string;
-    messages: ChatMessage[];
-    temperature?: number;
-    max_tokens?: number;
-    stream?: boolean;
-}
-
-interface OpenAIResponse {
-    id: string;
-    object: string;
-    created: number;
-    model: string;
-    choices: {
-        index: number;
-        message: {
-            role: string;
-            content: string;
-        };
-        finish_reason: string;
-    }[];
-    usage: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-    };
-}
-
-interface StreamChunk {
-    id: string;
-    object: string;
-    created: number;
-    model: string;
-    choices: {
-        index: number;
-        delta: {
-            role?: string;
-            content?: string;
-        };
-        finish_reason: string | null;
-    }[];
+/**
+ * Sends a standardized HTTP error response.
+ * Uses createErrorResponse from core.ts for consistent formatting.
+ */
+function sendErrorResponse(
+    res: http.ServerResponse,
+    statusCode: number,
+    message: string,
+    type: string
+): void {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(createErrorResponse(message, type, statusCode)));
 }
 
 // Cache for available models
@@ -109,83 +91,12 @@ async function getModel(requestedModel?: string): Promise<vscode.LanguageModelCh
         await refreshModels();
     }
 
-    if (!requestedModel || requestedModel === '') {
-        const config = vscode.workspace.getConfiguration('copilotProxy');
-        const defaultModel = config.get<string>('defaultModel', '');
-        requestedModel = defaultModel || undefined;
-    }
+    // Get default model from VS Code config if no model specified
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const defaultModel = config.get<string>('defaultModel', '');
 
-    if (requestedModel) {
-        const requested = requestedModel.toLowerCase();
-
-        // Try exact match first (case-insensitive)
-        let model = cachedModels.find(m => m.id.toLowerCase() === requested);
-        if (model) return model;
-
-        // Try exact family match
-        model = cachedModels.find(m => m.family.toLowerCase() === requested);
-        if (model) return model;
-
-        // Score-based matching - find the best match, not just the first
-        const keyIdentifiers = ['claude', 'gpt', 'opus', 'sonnet', 'haiku', 'o1', 'o3', 'gemini'];
-
-        // Extract version from request (e.g., "4-5" -> "4.5", "4.1" -> "4.1")
-        const versionMatch = requested.match(/(\d+)[.-](\d+)/);
-        const requestedVersion = versionMatch ? `${versionMatch[1]}.${versionMatch[2]}` : null;
-
-        let bestMatch: vscode.LanguageModelChat | undefined;
-        let bestScore = 0;
-
-        for (const m of cachedModels) {
-            const family = m.family.toLowerCase();
-            const name = m.name.toLowerCase();
-            const id = m.id.toLowerCase();
-            let score = 0;
-
-            // Count how many key identifiers match between request and model
-            for (const key of keyIdentifiers) {
-                const requestHasKey = requested.includes(key);
-                const modelHasKey = family.includes(key) || name.includes(key) || id.includes(key);
-
-                if (requestHasKey && modelHasKey) {
-                    score += 10; // Both have the key - strong match
-                } else if (requestHasKey !== modelHasKey) {
-                    score -= 1; // Mismatch penalty
-                }
-            }
-
-            // Version matching - high priority
-            if (requestedVersion) {
-                const modelStr = `${family} ${name} ${id}`;
-                if (modelStr.includes(requestedVersion)) {
-                    score += 50; // Strong bonus for version match
-                } else {
-                    // Check if model has a different version - penalize
-                    const modelVersionMatch = modelStr.match(/(\d+)\.(\d+)/);
-                    if (modelVersionMatch) {
-                        score -= 20; // Penalty for wrong version
-                    }
-                }
-            }
-
-            // Bonus for family containment
-            if (requested.includes(family) && family.length > 2) {
-                score += 5;
-            }
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = m;
-            }
-        }
-
-        if (bestMatch && bestScore > 0) {
-            return bestMatch;
-        }
-    }
-
-    // Return first available model
-    return cachedModels[0];
+    // Use findBestModel from core.ts for matching logic
+    return findBestModel(requestedModel, cachedModels, defaultModel);
 }
 
 function convertToVSCodeMessages(messages: ChatMessage[]): vscode.LanguageModelChatMessage[] {
@@ -203,20 +114,52 @@ function convertToVSCodeMessages(messages: ChatMessage[]): vscode.LanguageModelC
     });
 }
 
-function generateId(): string {
-    return 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
-}
-
 async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     let body = '';
+    let bodySize = 0;
+    let aborted = false;
+
+    // Set request timeout
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+        if (!aborted) {
+            aborted = true;
+            logError(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+            sendErrorResponse(res, 408, 'Request timeout', 'timeout_error');
+            req.destroy();
+        }
+    });
 
     req.on('data', chunk => {
+        bodySize += chunk.length;
+        if (bodySize > MAX_REQUEST_BODY_SIZE) {
+            aborted = true;
+            logError(`Request body too large: ${bodySize} bytes (max: ${MAX_REQUEST_BODY_SIZE})`);
+            sendErrorResponse(res, 413, 'Request body too large', 'invalid_request_error');
+            req.destroy();
+            return;
+        }
         body += chunk.toString();
     });
 
     req.on('end', async () => {
+        if (aborted) return;
         try {
-            const request: ChatCompletionRequest = JSON.parse(body);
+            // Parse and validate request
+            const parsed = parseRequestBody(body);
+            if (!parsed) {
+                logError('Invalid JSON in request body');
+                sendErrorResponse(res, 400, 'Invalid JSON in request body', 'invalid_request_error');
+                return;
+            }
+
+            const validationError = validateRequest(parsed);
+            if (validationError) {
+                logError(`Request validation failed: ${validationError}`);
+                sendErrorResponse(res, 400, validationError, 'invalid_request_error');
+                return;
+            }
+
+            const request = parsed;
             const model = await getModel(request.model);
 
             // Calculate context size
@@ -228,14 +171,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
             if (!model) {
                 logError('No language models available');
-                res.writeHead(503, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    error: {
-                        message: 'No language models available. Make sure GitHub Copilot is installed and authenticated.',
-                        type: 'service_unavailable',
-                        code: 503
-                    }
-                }));
+                sendErrorResponse(res, 503, 'No language models available. Make sure GitHub Copilot is installed and authenticated.', 'service_unavailable');
                 return;
             }
 
@@ -318,7 +254,8 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 } catch (error) {
                     logError('Streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                    res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+                    // Send error in proper SSE format with consistent error structure
+                    res.write(`data: ${JSON.stringify(createErrorResponse(errorMessage, 'server_error', 500))}\n\n`);
                     res.end();
                 } finally {
                     clearTimeout(timeoutId);
@@ -365,14 +302,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 } catch (error) {
                     logError('Non-streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
-                        error: {
-                            message: errorMessage,
-                            type: 'server_error',
-                            code: 500
-                        }
-                    }));
+                    sendErrorResponse(res, 500, errorMessage, 'server_error');
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -381,14 +311,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
         } catch (error) {
             logError('Invalid request', error);
             const errorMessage = error instanceof Error ? error.message : 'Invalid JSON';
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: errorMessage,
-                    type: 'invalid_request_error',
-                    code: 400
-                }
-            }));
+            sendErrorResponse(res, 400, errorMessage, 'invalid_request_error');
         }
     });
 }
@@ -432,7 +355,7 @@ function handleHealth(res: http.ServerResponse): void {
     }));
 }
 
-function createServer(port: number): http.Server {
+function createServer(_port: number): http.Server {
     return http.createServer(async (req, res) => {
         // Handle CORS preflight
         if (req.method === 'OPTIONS') {
@@ -457,14 +380,7 @@ function createServer(port: number): http.Server {
         } else if (req.method === 'GET' && (url === '/health' || url === '/')) {
             handleHealth(res);
         } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: `Unknown endpoint: ${req.method} ${url}`,
-                    type: 'not_found',
-                    code: 404
-                }
-            }));
+            sendErrorResponse(res, 404, `Unknown endpoint: ${req.method} ${url}`, 'not_found');
         }
     });
 }
@@ -482,6 +398,10 @@ async function startServer(): Promise<void> {
     refreshModels(); // Non-blocking
 
     server = createServer(port);
+
+    // Configure server-level timeouts
+    server.timeout = REQUEST_TIMEOUT_MS;
+    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
 
     server.listen(port, async () => {
         log(`Server started on port ${port}`);
@@ -534,20 +454,6 @@ function updateStatusBar(port?: number): void {
         statusBarItem.text = `$(circle-slash) Copilot Proxy: Off`;
         statusBarItem.tooltip = 'Copilot Proxy is not running\nClick to show status';
     }
-}
-
-interface ModelInfo {
-    id: string;
-    name: string;
-    family: string;
-    vendor: string;
-    maxInputTokens: number;
-}
-
-interface SettingsInfo {
-    port: number;
-    autoStart: boolean;
-    defaultModel: string;
 }
 
 function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[], settings?: SettingsInfo): string {
@@ -1030,21 +936,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
 </html>`;
 }
 
-function escapeHtml(text: string): string {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
 async function showStatus(): Promise<void> {
     await refreshModels();
-
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    const port = config.get<number>('port', 8080);
-    const isRunning = server !== null;
 
     // If panel already exists, reveal it and update content
     if (statusPanel) {
@@ -1092,11 +985,12 @@ async function showStatus(): Promise<void> {
             case 'openSettings':
                 vscode.commands.executeCommand('workbench.action.openSettings', 'copilotProxy');
                 break;
-            case 'updateSetting':
+            case 'updateSetting': {
                 const config = vscode.workspace.getConfiguration('copilotProxy');
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
                 break;
+            }
             case 'refreshModels':
                 log('Refreshing models...');
                 await refreshModels();
