@@ -9,6 +9,10 @@ Requirements:
 2. A proxy server running at 127.0.0.1:8080 that bridges to VS Code's LLM API
 3. Set VSCODE_LLM_ENDPOINT if using a different port
 
+IMPORTANT: The VS Code proxy has a payload size limit of ~160KB.
+For larger prompts (like full chapter generation), use the direct Anthropic API
+or see vscode_llm_example_full.py for automatic fallback handling.
+
 Usage:
     py examples/vscode_llm_example.py
 """

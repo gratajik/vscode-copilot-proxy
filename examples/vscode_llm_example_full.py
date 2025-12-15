@@ -17,6 +17,7 @@ Usage:
 
 import asyncio
 import aiohttp
+import json
 import os
 from anthropic import AsyncAnthropic
 
@@ -44,6 +45,17 @@ class EmptyResponseError(VSCodeLLMError):
 class VSCodeLLMConnectionError(VSCodeLLMError):
     """Failed to connect to VS Code LLM server."""
     pass
+
+
+class PayloadTooLargeError(VSCodeLLMError):
+    """Payload exceeds VS Code proxy size limit (~160KB)."""
+    pass
+
+
+# VS Code proxy has a payload size limit of approximately 160-170KB
+# We use 100KB as a conservative threshold to avoid connection failures
+VSCODE_PAYLOAD_LIMIT_KB = 100
+VSCODE_PAYLOAD_LIMIT_BYTES = VSCODE_PAYLOAD_LIMIT_KB * 1024
 
 
 async def call_vscode_llm(
@@ -81,8 +93,18 @@ async def call_vscode_llm(
         "max_tokens": max_tokens
     }
 
+    # Check payload size before sending - VS Code proxy has ~160KB limit
+    payload_json = json.dumps(payload)
+    payload_size = len(payload_json.encode('utf-8'))
+    if payload_size > VSCODE_PAYLOAD_LIMIT_BYTES:
+        raise PayloadTooLargeError(
+            f"Payload size ({payload_size // 1024}KB) exceeds VS Code proxy limit ({VSCODE_PAYLOAD_LIMIT_KB}KB). "
+            f"Use Anthropic API for large prompts."
+        )
+
     print(f"Calling VS Code LLM at {endpoint}...")
     print(f"Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
+    print(f"Payload size: {payload_size // 1024}KB")
 
     last_error = None
 
@@ -214,6 +236,28 @@ async def call_llm_with_fallback(
     try:
         # Try VS Code LLM first (with retries)
         return await call_vscode_llm(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    except PayloadTooLargeError as e:
+        # Payload too large - fall back immediately, no retry needed
+        print(f"\n  Payload too large for VS Code proxy: {e}")
+
+        # Check if fallback is available
+        if not VSCODE_LLM_FALLBACK_ENABLED:
+            print("  Fallback disabled (set VSCODE_LLM_FALLBACK=true to enable)")
+            raise
+
+        if not os.getenv('ANTHROPIC_API_KEY'):
+            print("  No ANTHROPIC_API_KEY set - cannot fallback")
+            raise
+
+        # Fallback to Anthropic for large payloads
+        print("  Using Anthropic API for large payload...")
+        return await call_anthropic_fallback(
             prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
