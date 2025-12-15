@@ -90,8 +90,8 @@ Example output:
 
 ```
 [10:30:15] === Copilot Proxy Starting ===
-[10:30:15] Extension version: 0.0.1
-[10:30:15] Server started on port 8080
+[10:30:15] Extension version: 0.0.2
+[10:30:15] Server started on 127.0.0.1:8080
 [10:30:15] Endpoint: http://localhost:8080/v1/chat/completions
 [10:30:15]   Model: GPT-4o (gpt-4o) - max 128000 tokens
 [10:30:15]   Model: Claude 3.5 Sonnet (claude-3.5-sonnet) - max 16384 tokens
