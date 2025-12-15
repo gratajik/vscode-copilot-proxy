@@ -451,7 +451,7 @@ function updateStatusBar(port) {
 }
 function getWebviewContent(isRunning, port, models, settings) {
     const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
-    const statusText = isRunning ? `Running on port ${port}` : 'Stopped';
+    const statusText = isRunning ? `Running on 127.0.0.1:${port}` : 'Stopped';
     const buttonText = isRunning ? 'Stop Server' : 'Start Server';
     const buttonCommand = isRunning ? 'stop' : 'start';
     const modelCards = models.map(model => `
@@ -568,15 +568,19 @@ function getWebviewContent(isRunning, port, models, settings) {
         .main-layout {
             display: flex;
             gap: 24px;
-            align-items: flex-start;
+            align-items: stretch;
         }
         .left-column {
             flex: 0 0 280px;
             min-width: 0;
+            display: flex;
+            flex-direction: column;
         }
         .right-column {
             flex: 1;
             min-width: 0;
+            display: flex;
+            flex-direction: column;
         }
         .status-row {
             display: flex;
@@ -754,6 +758,7 @@ function getWebviewContent(isRunning, port, models, settings) {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            min-height: 24px;
         }
         .setting-input {
             width: 80px;
