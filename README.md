@@ -102,20 +102,39 @@ Example output:
 
 ## Using with External Tools
 
-### Example Script
+### Example Scripts
 
-See [examples/vscode_llm_example.py](examples/vscode_llm_example.py) for a complete working example that demonstrates:
+Two Python examples are included in the `examples/` folder:
 
-- Making requests to the Copilot Proxy API
-- Handling both streaming and non-streaming responses
-- Listing available models
-- Error handling
+#### Simple Example (`vscode_llm_example_simple.py`)
 
-Run it with:
+A straightforward example for getting started quickly. Demonstrates basic API calls with aiohttp and runs three demo prompts (simple question, code generation, creative writing).
 
 ```bash
-py examples/vscode_llm_example.py
+pip install aiohttp
+py examples/vscode_llm_example_simple.py
 ```
+
+#### Full Example with Retry and Fallback (`vscode_llm_example_full.py`)
+
+A production-ready example with robust error handling:
+
+- **Retry logic** - 3 retries with exponential backoff (2s, 4s, 8s)
+- **Custom exceptions** - `ContentFilteredError`, `EmptyResponseError`, `VSCodeLLMConnectionError`
+- **Anthropic fallback** - Automatically falls back to direct Anthropic API when VS Code LLM is unavailable
+- **Configurable** - Environment variables for endpoint, fallback toggle, and API key
+
+```bash
+pip install aiohttp anthropic
+export ANTHROPIC_API_KEY="sk-..."  # Optional: enables fallback
+py examples/vscode_llm_example_full.py
+```
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `VSCODE_LLM_ENDPOINT` | `http://127.0.0.1:8080/v1/chat/completions` | Proxy endpoint URL |
+| `VSCODE_LLM_FALLBACK` | `true` | Enable/disable Anthropic fallback |
+| `ANTHROPIC_API_KEY` | (none) | Required for fallback support |
 
 ### With Python (OpenAI client)
 

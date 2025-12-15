@@ -61,9 +61,12 @@ Write-Host "  - install.sh"
 Copy-Item "dist\QUICKSTART.md" -Destination $releaseDir
 Write-Host "  - QUICKSTART.md"
 
-# Copy example
-Copy-Item "examples\vscode_llm_example.py" -Destination "$releaseDir\examples\"
-Write-Host "  - examples\vscode_llm_example.py"
+# Copy examples
+Copy-Item "examples\vscode_llm_example_simple.py" -Destination "$releaseDir\examples\"
+Write-Host "  - examples\vscode_llm_example_simple.py"
+
+Copy-Item "examples\vscode_llm_example_full.py" -Destination "$releaseDir\examples\"
+Write-Host "  - examples\vscode_llm_example_full.py"
 
 Write-Host "  Done" -ForegroundColor Green
 
