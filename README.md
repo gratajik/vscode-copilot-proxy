@@ -12,6 +12,10 @@ Perfect for developers who want to use Copilot's models in custom workflows, aut
   <img src="images/CopilotProxy.png" alt="Copilot Proxy" width="600">
 </p>
 
+<p align="center">
+  <img src="images/LogAndStatusBar.png" alt="Log and Status Bar" width="600">
+</p>
+
 ## Features
 
 - **OpenAI-compatible API**: Exposes endpoints that work with any OpenAI-compatible client

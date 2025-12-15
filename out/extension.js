@@ -657,6 +657,9 @@ function getWebviewContent(isRunning, port, models, settings) {
         .section {
             margin-bottom: 24px;
         }
+        .status-row + .section {
+            margin-top: 24px;
+        }
         .section-header {
             font-weight: 600;
             margin-bottom: 12px;
@@ -811,6 +814,29 @@ function getWebviewContent(isRunning, port, models, settings) {
             height: 16px;
             accent-color: var(--vscode-button-background);
         }
+        .refresh-btn {
+            background: transparent;
+            border: none;
+            padding: 4px;
+            cursor: pointer;
+            color: var(--vscode-foreground);
+            opacity: 0.6;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .refresh-btn:hover {
+            opacity: 1;
+            background: var(--vscode-toolbar-hoverBackground);
+        }
+        .refresh-btn.spinning svg {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -823,7 +849,16 @@ function getWebviewContent(isRunning, port, models, settings) {
         <div class="main-layout">
             <div class="left-column">
                 <div class="section">
-                    <div class="section-header">Models (${models.length})</div>
+                    <div class="section-header">
+                        Models (${models.length})
+                        <button class="refresh-btn" id="refreshModelsBtn" title="Refresh Models">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6"></path>
+                                <path d="M1 20v-6h6"></path>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                            </svg>
+                        </button>
+                    </div>
                     ${models.length > 0 ? modelCards : '<div class="empty-state">No models available</div>'}
                 </div>
             </div>
@@ -877,6 +912,14 @@ function getWebviewContent(isRunning, port, models, settings) {
         if (defaultModelInput) {
             defaultModelInput.addEventListener('change', (e) => {
                 vscode.postMessage({ command: 'updateSetting', key: 'defaultModel', value: e.target.value });
+            });
+        }
+
+        const refreshModelsBtn = document.getElementById('refreshModelsBtn');
+        if (refreshModelsBtn) {
+            refreshModelsBtn.addEventListener('click', () => {
+                refreshModelsBtn.classList.add('spinning');
+                vscode.postMessage({ command: 'refreshModels' });
             });
         }
 
@@ -951,6 +994,12 @@ async function showStatus() {
                 const config = vscode.workspace.getConfiguration('copilotProxy');
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
+                break;
+            case 'refreshModels':
+                log('Refreshing models...');
+                await refreshModels();
+                updateStatusPanel();
+                log(`Models refreshed: ${cachedModels.length} available`);
                 break;
         }
     });

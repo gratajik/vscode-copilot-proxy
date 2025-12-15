@@ -15,7 +15,10 @@
       "Bash(cat:*)",
       "Bash(node -e:*)",
       "Bash(vsce package:*)",
-      "Bash(code --install-extension:*)"
+      "Bash(code --install-extension:*)",
+      "Bash(npm test)",
+      "Bash(npm uninstall:*)",
+      "Bash(npx mocha --require ts-node/register \"src/test/**/*.test.ts\")"
     ]
   }
 }
