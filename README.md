@@ -92,7 +92,7 @@ Example output:
 [10:30:15] === Copilot Proxy Starting ===
 [10:30:15] Extension version: 0.0.2
 [10:30:15] Server started on 127.0.0.1:8080
-[10:30:15] Endpoint: http://localhost:8080/v1/chat/completions
+[10:30:15] Endpoint: http://127.0.0.1:8080/v1/chat/completions
 [10:30:15]   Model: GPT-4o (gpt-4o) - max 128000 tokens
 [10:30:15]   Model: Claude 3.5 Sonnet (claude-3.5-sonnet) - max 16384 tokens
 [10:30:20] Request: 3 messages, ~1500 chars (~375 tokens), model: gpt-4o, stream: true
@@ -142,7 +142,7 @@ py examples/vscode_llm_example_full.py
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://127.0.0.1:8080/v1",
     api_key="not-needed"  # Any value works
 )
 
@@ -159,7 +159,7 @@ print(response.choices[0].message.content)
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://127.0.0.1:8080/v1",
     api_key="not-needed"
 )
 
@@ -177,7 +177,7 @@ for chunk in stream:
 ### With curl (streaming)
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -189,7 +189,7 @@ curl http://localhost:8080/v1/chat/completions \
 ### With Node.js
 
 ```javascript
-const response = await fetch('http://localhost:8080/v1/chat/completions', {
+const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -207,7 +207,7 @@ console.log(data.choices[0].message.content);
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://127.0.0.1:8080/v1",
     api_key="not-needed",
     model="claude-3.5-sonnet"
 )
@@ -225,7 +225,7 @@ Once running, the following endpoints are available:
 OpenAI-compatible chat completions endpoint.
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3.5-sonnet",
@@ -275,7 +275,7 @@ Server-Sent Events (SSE) format compatible with OpenAI's streaming API.
 List available models.
 
 ```bash
-curl http://localhost:8080/v1/models
+curl http://127.0.0.1:8080/v1/models
 ```
 
 **Response:**
@@ -303,7 +303,7 @@ curl http://localhost:8080/v1/models
 Health check endpoint.
 
 ```bash
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 ```
 
 **Response:**

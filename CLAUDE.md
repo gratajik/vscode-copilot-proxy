@@ -82,13 +82,13 @@ NOTE: This may have problems! Default to building and installing the extension.
 
 ```bash
 # Health check
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 
 # List available models
-curl http://localhost:8080/v1/models
+curl http://127.0.0.1:8080/v1/models
 
 # Chat completion
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello"}]}'
 ```
@@ -99,7 +99,7 @@ This is a VS Code extension that exposes an OpenAI-compatible HTTP API backed by
 
 **Core flow:**
 
-1. External client sends OpenAI-format request to `http://localhost:8080/v1/chat/completions`
+1. External client sends OpenAI-format request to `http://127.0.0.1:8080/v1/chat/completions`
 2. Extension converts messages to VS Code's `LanguageModelChatMessage` format
 3. Request is forwarded to Copilot via `vscode.lm.selectChatModels()` and `model.sendRequest()`
 4. Response is converted back to OpenAI format and returned
