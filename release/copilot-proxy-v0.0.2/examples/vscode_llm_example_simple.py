@@ -6,7 +6,7 @@ This demonstrates how to call Claude through VS Code's Language Model API
 
 Requirements:
 1. VS Code running with GitHub Copilot extension
-2. A proxy server running at localhost:8080 that bridges to VS Code's LLM API
+2. A proxy server running at 127.0.0.1:8080 that bridges to VS Code's LLM API
 3. Set VSCODE_LLM_ENDPOINT if using a different port
 
 Usage:
@@ -39,7 +39,7 @@ async def call_vscode_llm(
         The model's response text
     """
     # Get endpoint from environment or use default
-    endpoint = os.getenv('VSCODE_LLM_ENDPOINT', 'http://localhost:8080/v1/chat/completions')
+    endpoint = os.getenv('VSCODE_LLM_ENDPOINT', 'http://127.0.0.1:8080/v1/chat/completions')
 
     # Build the request payload (OpenAI-compatible format)
     payload = {
@@ -102,7 +102,7 @@ async def main():
         print(f"\nError: {e}")
         print("\nMake sure:")
         print("  1. VS Code is running with GitHub Copilot")
-        print("  2. The LLM proxy server is running at localhost:8080")
+        print("  2. The LLM proxy server is running at 127.0.0.1:8080")
         print("  3. Or set VSCODE_LLM_ENDPOINT to your proxy URL")
         return
 

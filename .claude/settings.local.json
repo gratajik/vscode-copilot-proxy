@@ -29,7 +29,8 @@
       "Bash(git tag:*)",
       "Bash(gh release create:*)",
       "Bash(vscode-copilot-proxy-0.0.2.vsix )",
-      "Bash(release/copilot-proxy-v0.0.2.zip)"
+      "Bash(release/copilot-proxy-v0.0.2.zip)",
+      "Bash(gh release upload:*)"
     ]
   }
 }

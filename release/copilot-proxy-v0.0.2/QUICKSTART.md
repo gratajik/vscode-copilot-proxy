@@ -31,13 +31,13 @@ The server starts automatically on port 8080.
 
 ```bash
 # Health check
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 
 # List available models
-curl http://localhost:8080/v1/models
+curl http://127.0.0.1:8080/v1/models
 
 # Chat completion
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
 ```
@@ -60,7 +60,7 @@ py examples/vscode_llm_example_simple.py
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://127.0.0.1:8080/v1",
     api_key="not-needed"
 )
 

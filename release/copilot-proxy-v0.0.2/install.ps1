@@ -63,7 +63,7 @@ Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Reload VS Code (Ctrl+Shift+P -> 'Reload Window')" -ForegroundColor White
 Write-Host "  2. The server starts automatically on port 8080" -ForegroundColor White
-Write-Host "  3. Test with: curl http://localhost:8080/health" -ForegroundColor White
+Write-Host "  3. Test with: curl http://127.0.0.1:8080/health" -ForegroundColor White
 Write-Host ""
 Write-Host "See QUICKSTART.md for usage examples." -ForegroundColor Yellow
 Write-Host ""
