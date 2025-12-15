@@ -31,7 +31,8 @@
       "Bash(vscode-copilot-proxy-0.0.2.vsix )",
       "Bash(release/copilot-proxy-v0.0.2.zip)",
       "Bash(gh release upload:*)",
-      "Bash(vsce publish)"
+      "Bash(vsce publish)",
+      "Bash(where:*)"
     ]
   }
 }
