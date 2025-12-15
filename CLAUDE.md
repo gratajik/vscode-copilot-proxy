@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 #### General
 
-Whenever planning or creating features, always create a design.md and tasks.me.  Follow the rules in task-workflow.md,  for both creating tasks, doing, them, and finishing them 
+Whenever planning or creating features, always create a design.md and TASKS.md. Follow the rules in `.claude/task-workflow.md` for both creating tasks, doing them, and finishing them.
+
+**MANDATORY:** Before creating any TASKS.md or design.md file, you MUST first read `.claude/task-workflow.md` to understand the required format. Do not assume you know the format - read the file every time.
 
 #### ⚠️ CRITICAL Bug Workaround
 
@@ -195,8 +197,15 @@ Use ISO 8601 with timezone: `YYYY-MM-DD HH:MM:SS UTC-X`
 
 When creating documentation for a new feature:
 
-1. Create directory: `docs/features/<feature-name>/`
-2. Add `design.md` with architecture and requirements
-3. Add `TASKS.md` with phased task breakdown
-4. Never place feature TASKS.md in project root
-- REmember - debugging does NOT Work - instead, always rebuild and reinstall
+1. **FIRST: Read `.claude/task-workflow.md`** - Understand required formats before writing anything
+2. Create directory: `docs/features/<feature-name>/`
+3. Add `design.md` with architecture and requirements
+4. Add `TASKS.md` with phased task breakdown using the format from task-workflow.md:
+   - Phase headers with Status, Progress %, timestamps
+   - Task markers: `[ ]` not started, `[>]` in progress, `[x]` complete
+   - Timestamp format: `YYYY-MM-DD HH:MM:SS UTC-X`
+5. Never place feature TASKS.md in project root
+
+## Debugging
+
+Remember - debugging does NOT work - instead, always rebuild and reinstall
