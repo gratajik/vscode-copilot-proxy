@@ -352,18 +352,18 @@ The server binds to localhost by default, preventing external network access. Fo
 
 ```bash
 # Health check
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 
 # List models
-curl http://localhost:8080/v1/models
+curl http://127.0.0.1:8080/v1/models
 
 # Non-streaming completion
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello"}]}'
 
 # Streaming completion
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```

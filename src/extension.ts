@@ -429,7 +429,7 @@ async function startServer(): Promise<void> {
 
     server.listen(port, '127.0.0.1', async () => {
         log(`Server started on 127.0.0.1:${port}`);
-        log(`Endpoint: http://localhost:${port}/v1/chat/completions`);
+        log(`Endpoint: http://127.0.0.1:${port}/v1/chat/completions`);
 
         // Log available models after server starts
         const models = await refreshModels();
@@ -508,8 +508,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             <div class="endpoints">
                 <div class="endpoint">
                     <span class="method post">POST</span>
-                    <code>http://localhost:${port}/v1/chat/completions</code>
-                    <button class="copy-btn" data-url="http://localhost:${port}/v1/chat/completions" title="Copy URL">
+                    <code>http://127.0.0.1:${port}/v1/chat/completions</code>
+                    <button class="copy-btn" data-url="http://127.0.0.1:${port}/v1/chat/completions" title="Copy URL">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -518,8 +518,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                 </div>
                 <div class="endpoint">
                     <span class="method get">GET</span>
-                    <code>http://localhost:${port}/v1/models</code>
-                    <button class="copy-btn" data-url="http://localhost:${port}/v1/models" title="Copy URL">
+                    <code>http://127.0.0.1:${port}/v1/models</code>
+                    <button class="copy-btn" data-url="http://127.0.0.1:${port}/v1/models" title="Copy URL">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -528,8 +528,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                 </div>
                 <div class="endpoint">
                     <span class="method get">GET</span>
-                    <code>http://localhost:${port}/health</code>
-                    <button class="copy-btn" data-url="http://localhost:${port}/health" title="Copy URL">
+                    <code>http://127.0.0.1:${port}/health</code>
+                    <button class="copy-btn" data-url="http://127.0.0.1:${port}/health" title="Copy URL">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>

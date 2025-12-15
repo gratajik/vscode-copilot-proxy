@@ -98,7 +98,7 @@ Task tracking for the LLM Proxy VS Code extension - an OpenAI-compatible HTTP se
 ### 2.6 Protocol Support
 
 - [ ] **2.6.1** Add WebSocket support as alternative to SSE streaming
-  - `ws://localhost:8080/v1/chat/completions`
+  - `ws://127.0.0.1:8080/v1/chat/completions`
   - Same request/response format as HTTP
 - [ ] **2.6.2** Add tool/function calling support (when VS Code API supports it)
   - Parse `tools` array from request
