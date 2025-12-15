@@ -37,6 +37,7 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
+const core_1 = require("./core");
 let server = null;
 let statusBarItem;
 let outputChannel;
@@ -55,6 +56,14 @@ function logError(message, error) {
         : `[${timestamp}] ERROR: ${message}`;
     console.error(`[Copilot Proxy] ERROR: ${message}`, error);
     outputChannel?.appendLine(formatted);
+}
+/**
+ * Sends a standardized HTTP error response.
+ * Uses createErrorResponse from core.ts for consistent formatting.
+ */
+function sendErrorResponse(res, statusCode, message, type) {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify((0, core_1.createErrorResponse)(message, type, statusCode)));
 }
 // Cache for available models
 let cachedModels = [];
@@ -88,73 +97,11 @@ async function getModel(requestedModel) {
     if (cachedModels.length === 0) {
         await refreshModels();
     }
-    if (!requestedModel || requestedModel === '') {
-        const config = vscode.workspace.getConfiguration('copilotProxy');
-        const defaultModel = config.get('defaultModel', '');
-        requestedModel = defaultModel || undefined;
-    }
-    if (requestedModel) {
-        const requested = requestedModel.toLowerCase();
-        // Try exact match first (case-insensitive)
-        let model = cachedModels.find(m => m.id.toLowerCase() === requested);
-        if (model)
-            return model;
-        // Try exact family match
-        model = cachedModels.find(m => m.family.toLowerCase() === requested);
-        if (model)
-            return model;
-        // Score-based matching - find the best match, not just the first
-        const keyIdentifiers = ['claude', 'gpt', 'opus', 'sonnet', 'haiku', 'o1', 'o3', 'gemini'];
-        // Extract version from request (e.g., "4-5" -> "4.5", "4.1" -> "4.1")
-        const versionMatch = requested.match(/(\d+)[.-](\d+)/);
-        const requestedVersion = versionMatch ? `${versionMatch[1]}.${versionMatch[2]}` : null;
-        let bestMatch;
-        let bestScore = 0;
-        for (const m of cachedModels) {
-            const family = m.family.toLowerCase();
-            const name = m.name.toLowerCase();
-            const id = m.id.toLowerCase();
-            let score = 0;
-            // Count how many key identifiers match between request and model
-            for (const key of keyIdentifiers) {
-                const requestHasKey = requested.includes(key);
-                const modelHasKey = family.includes(key) || name.includes(key) || id.includes(key);
-                if (requestHasKey && modelHasKey) {
-                    score += 10; // Both have the key - strong match
-                }
-                else if (requestHasKey !== modelHasKey) {
-                    score -= 1; // Mismatch penalty
-                }
-            }
-            // Version matching - high priority
-            if (requestedVersion) {
-                const modelStr = `${family} ${name} ${id}`;
-                if (modelStr.includes(requestedVersion)) {
-                    score += 50; // Strong bonus for version match
-                }
-                else {
-                    // Check if model has a different version - penalize
-                    const modelVersionMatch = modelStr.match(/(\d+)\.(\d+)/);
-                    if (modelVersionMatch) {
-                        score -= 20; // Penalty for wrong version
-                    }
-                }
-            }
-            // Bonus for family containment
-            if (requested.includes(family) && family.length > 2) {
-                score += 5;
-            }
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = m;
-            }
-        }
-        if (bestMatch && bestScore > 0) {
-            return bestMatch;
-        }
-    }
-    // Return first available model
-    return cachedModels[0];
+    // Get default model from VS Code config if no model specified
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const defaultModel = config.get('defaultModel', '');
+    // Use findBestModel from core.ts for matching logic
+    return (0, core_1.findBestModel)(requestedModel, cachedModels, defaultModel);
 }
 function convertToVSCodeMessages(messages) {
     return messages.map(msg => {
@@ -170,17 +117,48 @@ function convertToVSCodeMessages(messages) {
         }
     });
 }
-function generateId() {
-    return 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
-}
 async function handleChatCompletion(req, res) {
     let body = '';
+    let bodySize = 0;
+    let aborted = false;
+    // Set request timeout
+    req.setTimeout(core_1.REQUEST_TIMEOUT_MS, () => {
+        if (!aborted) {
+            aborted = true;
+            logError(`Request timed out after ${core_1.REQUEST_TIMEOUT_MS}ms`);
+            sendErrorResponse(res, 408, 'Request timeout', 'timeout_error');
+            req.destroy();
+        }
+    });
     req.on('data', chunk => {
+        bodySize += chunk.length;
+        if (bodySize > core_1.MAX_REQUEST_BODY_SIZE) {
+            aborted = true;
+            logError(`Request body too large: ${bodySize} bytes (max: ${core_1.MAX_REQUEST_BODY_SIZE})`);
+            sendErrorResponse(res, 413, 'Request body too large', 'invalid_request_error');
+            req.destroy();
+            return;
+        }
         body += chunk.toString();
     });
     req.on('end', async () => {
+        if (aborted)
+            return;
         try {
-            const request = JSON.parse(body);
+            // Parse and validate request
+            const parsed = (0, core_1.parseRequestBody)(body);
+            if (!parsed) {
+                logError('Invalid JSON in request body');
+                sendErrorResponse(res, 400, 'Invalid JSON in request body', 'invalid_request_error');
+                return;
+            }
+            const validationError = (0, core_1.validateRequest)(parsed);
+            if (validationError) {
+                logError(`Request validation failed: ${validationError}`);
+                sendErrorResponse(res, 400, validationError, 'invalid_request_error');
+                return;
+            }
+            const request = parsed;
             const model = await getModel(request.model);
             // Calculate context size
             const messageCount = request.messages.length;
@@ -189,14 +167,7 @@ async function handleChatCompletion(req, res) {
             log(`Request: ${messageCount} messages, ~${totalChars} chars (~${estimatedTokens} tokens), model: ${request.model || 'default'}, stream: ${request.stream ?? false}`);
             if (!model) {
                 logError('No language models available');
-                res.writeHead(503, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    error: {
-                        message: 'No language models available. Make sure GitHub Copilot is installed and authenticated.',
-                        type: 'service_unavailable',
-                        code: 503
-                    }
-                }));
+                sendErrorResponse(res, 503, 'No language models available. Make sure GitHub Copilot is installed and authenticated.', 'service_unavailable');
                 return;
             }
             log(`Using model: ${model.name} (${model.id}), max input: ${model.maxInputTokens} tokens`);
@@ -214,7 +185,7 @@ async function handleChatCompletion(req, res) {
                     'Connection': 'keep-alive',
                     'Access-Control-Allow-Origin': '*'
                 });
-                const id = generateId();
+                const id = (0, core_1.generateId)();
                 const created = Math.floor(Date.now() / 1000);
                 try {
                     const response = await model.sendRequest(vsCodeMessages, options, cancellationSource.token);
@@ -269,7 +240,8 @@ async function handleChatCompletion(req, res) {
                 catch (error) {
                     logError('Streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                    res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+                    // Send error in proper SSE format with consistent error structure
+                    res.write(`data: ${JSON.stringify((0, core_1.createErrorResponse)(errorMessage, 'server_error', 500))}\n\n`);
                     res.end();
                 }
                 finally {
@@ -288,7 +260,7 @@ async function handleChatCompletion(req, res) {
                     const responseTokens = Math.ceil(content.length / 4);
                     log(`Response: ~${content.length} chars (~${responseTokens} tokens)`);
                     const openAIResponse = {
-                        id: generateId(),
+                        id: (0, core_1.generateId)(),
                         object: 'chat.completion',
                         created: Math.floor(Date.now() / 1000),
                         model: model.id,
@@ -315,14 +287,7 @@ async function handleChatCompletion(req, res) {
                 catch (error) {
                     logError('Non-streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
-                        error: {
-                            message: errorMessage,
-                            type: 'server_error',
-                            code: 500
-                        }
-                    }));
+                    sendErrorResponse(res, 500, errorMessage, 'server_error');
                 }
                 finally {
                     clearTimeout(timeoutId);
@@ -333,14 +298,7 @@ async function handleChatCompletion(req, res) {
         catch (error) {
             logError('Invalid request', error);
             const errorMessage = error instanceof Error ? error.message : 'Invalid JSON';
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: errorMessage,
-                    type: 'invalid_request_error',
-                    code: 400
-                }
-            }));
+            sendErrorResponse(res, 400, errorMessage, 'invalid_request_error');
         }
     });
 }
@@ -379,7 +337,7 @@ function handleHealth(res) {
         models_available: cachedModels.length
     }));
 }
-function createServer(port) {
+function createServer(_port) {
     return http.createServer(async (req, res) => {
         // Handle CORS preflight
         if (req.method === 'OPTIONS') {
@@ -404,14 +362,7 @@ function createServer(port) {
             handleHealth(res);
         }
         else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: {
-                    message: `Unknown endpoint: ${req.method} ${url}`,
-                    type: 'not_found',
-                    code: 404
-                }
-            }));
+            sendErrorResponse(res, 404, `Unknown endpoint: ${req.method} ${url}`, 'not_found');
         }
     });
 }
@@ -425,6 +376,9 @@ async function startServer() {
     // Refresh models before starting
     refreshModels(); // Non-blocking
     server = createServer(port);
+    // Configure server-level timeouts
+    server.timeout = core_1.REQUEST_TIMEOUT_MS;
+    server.keepAliveTimeout = core_1.KEEP_ALIVE_TIMEOUT_MS;
     server.listen(port, async () => {
         log(`Server started on port ${port}`);
         log(`Endpoint: http://localhost:${port}/v1/chat/completions`);
@@ -483,14 +437,14 @@ function getWebviewContent(isRunning, port, models, settings) {
     const buttonCommand = isRunning ? 'stop' : 'start';
     const modelCards = models.map(model => `
         <div class="model-card">
-            <div class="model-name">${escapeHtml(model.name)}</div>
+            <div class="model-name">${(0, core_1.escapeHtml)(model.name)}</div>
             <div class="model-meta">
-                <span class="model-id">${escapeHtml(model.id)}</span>
+                <span class="model-id">${(0, core_1.escapeHtml)(model.id)}</span>
                 <span class="separator">-</span>
-                <span class="model-vendor">${escapeHtml(model.vendor)}</span>
+                <span class="model-vendor">${(0, core_1.escapeHtml)(model.vendor)}</span>
             </div>
             <div class="model-details">
-                <span class="detail-label">Family:</span> ${escapeHtml(model.family)}
+                <span class="detail-label">Family:</span> ${(0, core_1.escapeHtml)(model.family)}
                 <span class="separator">|</span>
                 <span class="detail-label">Max tokens:</span> ${model.maxInputTokens.toLocaleString()}
             </div>
@@ -533,7 +487,7 @@ function getWebviewContent(isRunning, port, models, settings) {
             </div>
         </div>
     ` : '';
-    const modelOptions = models.map(m => `<option value="${escapeHtml(m.id)}" ${settings?.defaultModel === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('');
+    const modelOptions = models.map(m => `<option value="${(0, core_1.escapeHtml)(m.id)}" ${settings?.defaultModel === m.id ? 'selected' : ''}>${(0, core_1.escapeHtml)(m.name)}</option>`).join('');
     const settingsSection = settings ? `
         <div class="section">
             <div class="section-header">Settings</div>
@@ -948,19 +902,8 @@ function getWebviewContent(isRunning, port, models, settings) {
 </body>
 </html>`;
 }
-function escapeHtml(text) {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
 async function showStatus() {
     await refreshModels();
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    const port = config.get('port', 8080);
-    const isRunning = server !== null;
     // If panel already exists, reveal it and update content
     if (statusPanel) {
         statusPanel.reveal(vscode.ViewColumn.One);
@@ -999,11 +942,12 @@ async function showStatus() {
             case 'openSettings':
                 vscode.commands.executeCommand('workbench.action.openSettings', 'copilotProxy');
                 break;
-            case 'updateSetting':
+            case 'updateSetting': {
                 const config = vscode.workspace.getConfiguration('copilotProxy');
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
                 break;
+            }
             case 'refreshModels':
                 log('Refreshing models...');
                 await refreshModels();

@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+#### General
+
+Whenever planning or creating features, always create a design.md and tasks.me.  Follow the rules in task-workflow.md,  for both creating tasks, doing, them, and finishing them 
+
 #### ⚠️ CRITICAL Bug Workaround
 
 CRITICAL: Follow these guidelines when using tools operating on file paths EXCEPT `Bash` in any skill or agent. Otherwise, they will not work correctly.

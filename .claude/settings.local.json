@@ -19,7 +19,9 @@
       "Bash(npm test)",
       "Bash(npm uninstall:*)",
       "Bash(npx mocha --require ts-node/register \"src/test/**/*.test.ts\")",
-      "Bash(npm run lint)"
+      "Bash(npm run lint)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
