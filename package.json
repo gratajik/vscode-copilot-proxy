@@ -4,7 +4,7 @@
   "publisher": "RatajikSoftware",
   "description": "Proxy requests from external agents through VS Code Copilot models",
   "icon": "images/icon.png",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "repository": {
     "type": "git",
     "url": "https://github.com/gratajik/vscode-copilot-proxy"
