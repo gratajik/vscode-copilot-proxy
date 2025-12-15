@@ -6,6 +6,7 @@ import {
     StreamChunk,
     ModelInfo,
     SettingsInfo,
+    RequestLogEntry,
     MAX_REQUEST_BODY_SIZE,
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
@@ -25,6 +26,22 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let statusPanel: vscode.WebviewPanel | undefined;
 
+// Request logs storage (max 50 entries)
+const MAX_REQUEST_LOGS = 50;
+let requestLogs: RequestLogEntry[] = [];
+
+function addRequestLog(entry: RequestLogEntry): void {
+    requestLogs.unshift(entry);
+    if (requestLogs.length > MAX_REQUEST_LOGS) {
+        requestLogs = requestLogs.slice(0, MAX_REQUEST_LOGS);
+    }
+    // Update panel if open and logging is enabled
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    if (config.get<boolean>('logRequestsToUI', false)) {
+        updateStatusPanel();
+    }
+}
+
 function log(message: string): void {
     const timestamp = new Date().toLocaleTimeString();
     const formatted = `[${timestamp}] ${message}`;
@@ -40,6 +57,18 @@ function logError(message: string, error?: unknown): void {
         : `[${timestamp}] ERROR: ${message}`;
     console.error(`[Copilot Proxy] ERROR: ${message}`, error);
     outputChannel?.appendLine(formatted);
+}
+
+function logRaw(label: string, content: string): void {
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    if (!config.get<boolean>('rawLogging', false)) return;
+
+    const timestamp = new Date().toLocaleTimeString();
+    const separator = '─'.repeat(60);
+    outputChannel?.appendLine(`[${timestamp}] ${separator}`);
+    outputChannel?.appendLine(`[${timestamp}] RAW ${label}:`);
+    outputChannel?.appendLine(content);
+    outputChannel?.appendLine(`[${timestamp}] ${separator}`);
 }
 
 /**
@@ -129,6 +158,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
     let body = '';
     let bodySize = 0;
     let aborted = false;
+    const startTime = Date.now();
 
     // Set request timeout
     req.setTimeout(REQUEST_TIMEOUT_MS, () => {
@@ -171,6 +201,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
             }
 
             const request = parsed;
+            const requestId = generateId();
+
+            // Raw logging of request
+            logRaw('REQUEST', JSON.stringify(request, null, 2));
+
             const model = await getModel(request.model);
 
             // Calculate context size
@@ -228,8 +263,10 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
                     // Stream content chunks
                     let responseChars = 0;
+                    let fullResponse = '';
                     for await (const chunk of response.text) {
                         responseChars += chunk.length;
+                        fullResponse += chunk;
                         const streamChunk: StreamChunk = {
                             id,
                             object: 'chat.completion.chunk',
@@ -262,12 +299,48 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
                     const responseTokens = Math.ceil(responseChars / 4);
                     log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)`);
+
+                    // Raw logging of response
+                    logRaw('RESPONSE (stream)', fullResponse);
+
+                    // Log to UI
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: responseChars,
+                        stream: true,
+                        durationMs: Date.now() - startTime,
+                        status: 'success'
+                    });
                 } catch (error) {
                     logError('Streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                    const errorStack = error instanceof Error ? error.stack : String(error);
+                    logRaw('ERROR (stream)', `${errorMessage}\n\nStack:\n${errorStack}`);
                     // Send error in proper SSE format with consistent error structure
                     res.write(`data: ${JSON.stringify(createErrorResponse(errorMessage, 'server_error', 500))}\n\n`);
                     res.end();
+
+                    // Log error to UI
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: 0,
+                        stream: true,
+                        durationMs: Date.now() - startTime,
+                        status: 'error',
+                        errorMessage
+                    });
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -284,6 +357,9 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
                     const responseTokens = Math.ceil(content.length / 4);
                     log(`Response: ~${content.length} chars (~${responseTokens} tokens)`);
+
+                    // Raw logging of response
+                    logRaw('RESPONSE', content);
 
                     const openAIResponse: OpenAIResponse = {
                         id: generateId(),
@@ -310,10 +386,43 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         ...getCorsHeaders(req.headers.origin)
                     });
                     res.end(JSON.stringify(openAIResponse));
+
+                    // Log to UI
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: content.length,
+                        stream: false,
+                        durationMs: Date.now() - startTime,
+                        status: 'success'
+                    });
                 } catch (error) {
                     logError('Non-streaming request failed', error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                    const errorStack = error instanceof Error ? error.stack : String(error);
+                    logRaw('ERROR', `${errorMessage}\n\nStack:\n${errorStack}`);
                     sendErrorResponse(res, 500, errorMessage, 'server_error');
+
+                    // Log error to UI
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: 0,
+                        stream: false,
+                        durationMs: Date.now() - startTime,
+                        status: 'error',
+                        errorMessage
+                    });
                 } finally {
                     clearTimeout(timeoutId);
                     cancellationSource.dispose();
@@ -480,7 +589,7 @@ function updateStatusBar(port?: number): void {
     }
 }
 
-function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[], settings?: SettingsInfo): string {
+function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[], settings?: SettingsInfo, logs: RequestLogEntry[] = []): string {
     const statusColor = isRunning ? '#4caf50' : '#9e9e9e';
     const statusText = isRunning ? `Running on 127.0.0.1:${port}` : 'Stopped';
     const buttonText = isRunning ? 'Stop Server' : 'Start Server';
@@ -563,9 +672,67 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                         ${modelOptions}
                     </select>
                 </div>
+                <div class="setting-item">
+                    <label class="setting-label" for="logRequestsInput">Log Requests to UI</label>
+                    <input type="checkbox" id="logRequestsInput" class="setting-checkbox" ${settings.logRequestsToUI ? 'checked' : ''} />
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label" for="rawLoggingInput">Raw Logging (verbose)</label>
+                    <input type="checkbox" id="rawLoggingInput" class="setting-checkbox" ${settings.rawLogging ? 'checked' : ''} />
+                </div>
             </div>
         </div>
     ` : '';
+
+    // Generate logs section
+    const logsSection = logs.length > 0 ? `
+        <div class="section logs-section">
+            <div class="section-header">
+                Request Logs (${logs.length})
+                <button class="secondary-btn" id="clearLogsBtn">Clear</button>
+            </div>
+            <div class="logs-table-container">
+                <table class="logs-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Model</th>
+                            <th>Msgs</th>
+                            <th>In</th>
+                            <th>Out</th>
+                            <th>Stream</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.map(entry => {
+                            const time = new Date(entry.timestamp).toLocaleTimeString();
+                            const statusClass = entry.status === 'success' ? 'status-success' : 'status-error';
+                            const statusIcon = entry.status === 'success' ? '✓' : '✗';
+                            return `
+                                <tr class="${statusClass}">
+                                    <td class="log-time">${escapeHtml(time)}</td>
+                                    <td class="log-model" title="${escapeHtml(entry.model)}">${escapeHtml(entry.model.split('/').pop() || entry.model)}</td>
+                                    <td class="log-num">${entry.messageCount}</td>
+                                    <td class="log-num">${entry.inputChars.toLocaleString()}</td>
+                                    <td class="log-num">${entry.outputChars.toLocaleString()}</td>
+                                    <td class="log-stream">${entry.stream ? 'Yes' : 'No'}</td>
+                                    <td class="log-duration">${entry.durationMs}ms</td>
+                                    <td class="log-status">${statusIcon}${entry.errorMessage ? ` <span title="${escapeHtml(entry.errorMessage)}">!</span>` : ''}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    ` : (settings?.logRequestsToUI ? `
+        <div class="section logs-section">
+            <div class="section-header">Request Logs (0)</div>
+            <div class="empty-state">No requests logged yet</div>
+        </div>
+    ` : '');
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -853,6 +1020,69 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+        .logs-section {
+            margin-top: 24px;
+        }
+        .logs-table-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border-radius: 6px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+        }
+        .logs-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        .logs-table th,
+        .logs-table td {
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--vscode-widget-border);
+        }
+        .logs-table th {
+            background: var(--vscode-editor-background);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .logs-table tr:last-child td {
+            border-bottom: none;
+        }
+        .logs-table .log-time {
+            font-family: var(--vscode-editor-font-family);
+            white-space: nowrap;
+        }
+        .logs-table .log-model {
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .logs-table .log-num {
+            text-align: right;
+            font-family: var(--vscode-editor-font-family);
+        }
+        .logs-table .log-stream {
+            text-align: center;
+        }
+        .logs-table .log-duration {
+            text-align: right;
+            font-family: var(--vscode-editor-font-family);
+        }
+        .logs-table .log-status {
+            text-align: center;
+        }
+        .logs-table tr.status-success .log-status {
+            color: #4caf50;
+        }
+        .logs-table tr.status-error .log-status {
+            color: #f44336;
+        }
+        .logs-table tr.status-error {
+            background: rgba(244, 67, 54, 0.1);
+        }
     </style>
 </head>
 <body>
@@ -893,6 +1123,8 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
                 ${endpoints}
             </div>
         </div>
+
+        ${logsSection}
     </div>
 
     <script>
@@ -928,6 +1160,27 @@ function getWebviewContent(isRunning: boolean, port: number, models: ModelInfo[]
         if (defaultModelInput) {
             defaultModelInput.addEventListener('change', (e) => {
                 vscode.postMessage({ command: 'updateSetting', key: 'defaultModel', value: e.target.value });
+            });
+        }
+
+        const logRequestsInput = document.getElementById('logRequestsInput');
+        if (logRequestsInput) {
+            logRequestsInput.addEventListener('change', (e) => {
+                vscode.postMessage({ command: 'updateSetting', key: 'logRequestsToUI', value: e.target.checked });
+            });
+        }
+
+        const rawLoggingInput = document.getElementById('rawLoggingInput');
+        if (rawLoggingInput) {
+            rawLoggingInput.addEventListener('change', (e) => {
+                vscode.postMessage({ command: 'updateSetting', key: 'rawLogging', value: e.target.checked });
+            });
+        }
+
+        const clearLogsBtn = document.getElementById('clearLogsBtn');
+        if (clearLogsBtn) {
+            clearLogsBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'clearLogs' });
             });
         }
 
@@ -1018,6 +1271,10 @@ async function showStatus(): Promise<void> {
                 const config = vscode.workspace.getConfiguration('copilotProxy');
                 await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
                 log(`Setting updated: ${message.key} = ${message.value}`);
+                // Refresh panel if logging setting changed
+                if (message.key === 'logRequestsToUI') {
+                    updateStatusPanel();
+                }
                 break;
             }
             case 'refreshModels':
@@ -1027,6 +1284,11 @@ async function showStatus(): Promise<void> {
                 // Notify webview that refresh is complete (in case it needs to stop spinner)
                 statusPanel?.webview.postMessage({ command: 'refreshComplete' });
                 log(`Models refreshed: ${cachedModels.length} available`);
+                break;
+            case 'clearLogs':
+                requestLogs = [];
+                log('Request logs cleared');
+                updateStatusPanel();
                 break;
         }
     });
@@ -1044,23 +1306,30 @@ function updateStatusPanel(): void {
     const port = config.get<number>('port', 8080);
     const autoStart = config.get<boolean>('autoStart', true);
     const defaultModel = config.get<string>('defaultModel', '');
+    const logRequestsToUI = config.get<boolean>('logRequestsToUI', false);
+    const rawLogging = config.get<boolean>('rawLogging', false);
     const isRunning = server !== null;
 
-    const models: ModelInfo[] = cachedModels.map(m => ({
-        id: m.id,
-        name: m.name,
-        family: m.family,
-        vendor: m.vendor,
-        maxInputTokens: m.maxInputTokens
-    }));
+    // Map and sort models alphabetically by name
+    const models: ModelInfo[] = cachedModels
+        .map(m => ({
+            id: m.id,
+            name: m.name,
+            family: m.family,
+            vendor: m.vendor,
+            maxInputTokens: m.maxInputTokens
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
 
     const settings: SettingsInfo = {
         port,
         autoStart,
-        defaultModel
+        defaultModel,
+        logRequestsToUI,
+        rawLogging
     };
 
-    statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings);
+    statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings, logRequestsToUI ? requestLogs : []);
 }
 
 export function activate(context: vscode.ExtensionContext): void {

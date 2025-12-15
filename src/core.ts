@@ -127,6 +127,23 @@ export interface SettingsInfo {
     port: number;
     autoStart: boolean;
     defaultModel: string;
+    logRequestsToUI: boolean;
+    rawLogging: boolean;
+}
+
+export interface RequestLogEntry {
+    id: string;
+    timestamp: string;
+    method: string;
+    endpoint: string;
+    model: string;
+    messageCount: number;
+    inputChars: number;
+    outputChars: number;
+    stream: boolean;
+    durationMs: number;
+    status: 'success' | 'error';
+    errorMessage?: string;
 }
 
 /**

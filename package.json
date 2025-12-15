@@ -51,6 +51,16 @@
           "type": "string",
           "default": "",
           "description": "Default model to use when not specified in request (leave empty to use first available)"
+        },
+        "copilotProxy.logRequestsToUI": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log all requests and responses to the status panel UI"
+        },
+        "copilotProxy.rawLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log raw request/response content to the output channel (verbose)"
         }
       }
     }
