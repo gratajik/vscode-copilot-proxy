@@ -923,6 +923,15 @@ function getWebviewContent(isRunning, port, models, settings) {
             });
         }
 
+        // Listen for messages from extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'refreshComplete') {
+                const btn = document.getElementById('refreshModelsBtn');
+                if (btn) btn.classList.remove('spinning');
+            }
+        });
+
         document.querySelectorAll('.copy-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const url = btn.dataset.url;
@@ -999,6 +1008,8 @@ async function showStatus() {
                 log('Refreshing models...');
                 await refreshModels();
                 updateStatusPanel();
+                // Notify webview that refresh is complete (in case it needs to stop spinner)
+                statusPanel?.webview.postMessage({ command: 'refreshComplete' });
                 log(`Models refreshed: ${cachedModels.length} available`);
                 break;
         }

@@ -100,6 +100,103 @@ Example output:
 [10:30:22] Response (stream): ~800 chars (~200 tokens)
 ```
 
+## Using with External Tools
+
+### Example Script
+
+See [examples/vscode_llm_example.py](examples/vscode_llm_example.py) for a complete working example that demonstrates:
+
+- Making requests to the Copilot Proxy API
+- Handling both streaming and non-streaming responses
+- Listing available models
+- Error handling
+
+Run it with:
+
+```bash
+py examples/vscode_llm_example.py
+```
+
+### With Python (OpenAI client)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed"  # Any value works
+)
+
+response = client.chat.completions.create(
+    model="claude-3.5-sonnet",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)
+```
+
+### With Python (streaming)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed"
+)
+
+stream = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Write a short poem"}],
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### With curl (streaming)
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "Write a haiku"}],
+    "stream": true
+  }'
+```
+
+### With Node.js
+
+```javascript
+const response = await fetch('http://localhost:8080/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        model: 'claude-3.5-sonnet',
+        messages: [{ role: 'user', content: 'Hello!' }]
+    })
+});
+const data = await response.json();
+console.log(data.choices[0].message.content);
+```
+
+### With LangChain
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="not-needed",
+    model="claude-3.5-sonnet"
+)
+
+response = llm.invoke("What is the capital of France?")
+print(response.content)
+```
+
 ## API Endpoints
 
 Once running, the following endpoints are available:
@@ -208,103 +305,6 @@ Settings available in VS Code Settings (search for "Copilot Proxy"):
 | `copilotProxy.port` | `8080` | Port number for the proxy server |
 | `copilotProxy.autoStart` | `true` | Automatically start when VS Code opens |
 | `copilotProxy.defaultModel` | `""` | Default model when not specified in request (leave empty for first available) |
-
-## Using with External Tools
-
-### Example Script
-
-See [examples/vscode_llm_example.py](examples/vscode_llm_example.py) for a complete working example that demonstrates:
-
-- Making requests to the Copilot Proxy API
-- Handling both streaming and non-streaming responses
-- Listing available models
-- Error handling
-
-Run it with:
-
-```bash
-py examples/vscode_llm_example.py
-```
-
-### With Python (OpenAI client)
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="not-needed"  # Any value works
-)
-
-response = client.chat.completions.create(
-    model="claude-3.5-sonnet",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
-```
-
-### With Python (streaming)
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="not-needed"
-)
-
-stream = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Write a short poem"}],
-    stream=True
-)
-
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
-```
-
-### With curl (streaming)
-
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-3.5-sonnet",
-    "messages": [{"role": "user", "content": "Write a haiku"}],
-    "stream": true
-  }'
-```
-
-### With Node.js
-
-```javascript
-const response = await fetch('http://localhost:8080/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        model: 'claude-3.5-sonnet',
-        messages: [{ role: 'user', content: 'Hello!' }]
-    })
-});
-const data = await response.json();
-console.log(data.choices[0].message.content);
-```
-
-### With LangChain
-
-```python
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="not-needed",
-    model="claude-3.5-sonnet"
-)
-
-response = llm.invoke("What is the capital of France?")
-print(response.content)
-```
 
 ## Commands
 
