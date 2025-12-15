@@ -15,9 +15,11 @@ import {
     formatLogMessage,
     formatErrorMessage,
     MODEL_KEY_IDENTIFIERS,
+    MODEL_SCORE,
     MAX_REQUEST_BODY_SIZE,
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
+    MODEL_CACHE_TTL_MS,
     ChatMessage,
     ChatCompletionRequest
 } from '../core';
@@ -471,6 +473,25 @@ describe('Core Utilities', () => {
         });
     });
 
+    describe('MODEL_SCORE', () => {
+        it('should have positive version match score', () => {
+            expect(MODEL_SCORE.VERSION_MATCH).to.be.greaterThan(0);
+        });
+
+        it('should have negative version mismatch penalty', () => {
+            expect(MODEL_SCORE.VERSION_MISMATCH).to.be.lessThan(0);
+        });
+
+        it('should have positive key identifier match score', () => {
+            expect(MODEL_SCORE.KEY_IDENTIFIER_MATCH).to.be.greaterThan(0);
+        });
+
+        it('should have version match as highest priority', () => {
+            expect(MODEL_SCORE.VERSION_MATCH).to.be.greaterThan(MODEL_SCORE.KEY_IDENTIFIER_MATCH);
+            expect(MODEL_SCORE.VERSION_MATCH).to.be.greaterThan(MODEL_SCORE.FAMILY_CONTAINMENT);
+        });
+    });
+
     describe('MAX_REQUEST_BODY_SIZE', () => {
         it('should be 10MB', () => {
             expect(MAX_REQUEST_BODY_SIZE).to.equal(10 * 1024 * 1024);
@@ -498,6 +519,16 @@ describe('Core Utilities', () => {
 
         it('should be a positive number', () => {
             expect(KEEP_ALIVE_TIMEOUT_MS).to.be.greaterThan(0);
+        });
+    });
+
+    describe('MODEL_CACHE_TTL_MS', () => {
+        it('should be 60 seconds', () => {
+            expect(MODEL_CACHE_TTL_MS).to.equal(60000);
+        });
+
+        it('should be a positive number', () => {
+            expect(MODEL_CACHE_TTL_MS).to.be.greaterThan(0);
         });
     });
 });

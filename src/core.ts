@@ -21,6 +21,23 @@ export const REQUEST_TIMEOUT_MS = 30000;
  */
 export const KEEP_ALIVE_TIMEOUT_MS = 5000;
 
+/**
+ * Model cache TTL in milliseconds (60 seconds).
+ * Controls how long cached models are valid before refresh.
+ */
+export const MODEL_CACHE_TTL_MS = 60000;
+
+/**
+ * CORS headers for HTTP responses.
+ * Allows all origins since server is localhost-only.
+ */
+export const CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400'
+} as const;
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -130,6 +147,34 @@ export function calculateContextSize(messages: ChatMessage[]): {
 export const MODEL_KEY_IDENTIFIERS = ['claude', 'gpt', 'opus', 'sonnet', 'haiku', 'o1', 'o3', 'gemini'];
 
 /**
+ * Model matching score constants.
+ *
+ * Scoring priorities (highest to lowest):
+ * 1. Exact ID/family match (handled before scoring)
+ * 2. Version match (+50)
+ * 3. Key identifier match (+10 per match)
+ * 4. Family containment (+5)
+ *
+ * Penalties:
+ * - Wrong version (-20)
+ * - Key identifier mismatch (-1)
+ */
+export const MODEL_SCORE = {
+    /** Bonus when requested version matches model version */
+    VERSION_MATCH: 50,
+    /** Penalty when model has different version than requested */
+    VERSION_MISMATCH: -20,
+    /** Bonus per matching key identifier (claude, gpt, etc.) */
+    KEY_IDENTIFIER_MATCH: 10,
+    /** Penalty when request has key that model doesn't or vice versa */
+    KEY_IDENTIFIER_MISMATCH: -1,
+    /** Bonus when request contains model family name */
+    FAMILY_CONTAINMENT: 5,
+    /** Minimum family length to award containment bonus */
+    MIN_FAMILY_LENGTH: 3
+} as const;
+
+/**
  * Extracts version from a model request string.
  * E.g., "claude-4-5" -> "4.5", "gpt-4.1" -> "4.1"
  */
@@ -141,6 +186,8 @@ export function extractVersion(requested: string): string | null {
 /**
  * Scores a model against a requested model string.
  * Higher scores indicate better matches.
+ *
+ * @see MODEL_SCORE for scoring constants and priorities
  */
 export function scoreModelMatch(
     requested: string,
@@ -158,9 +205,9 @@ export function scoreModelMatch(
         const modelHasKey = family.includes(key) || name.includes(key) || id.includes(key);
 
         if (requestHasKey && modelHasKey) {
-            score += 10; // Both have the key - strong match
+            score += MODEL_SCORE.KEY_IDENTIFIER_MATCH;
         } else if (requestHasKey !== modelHasKey) {
-            score -= 1; // Mismatch penalty
+            score += MODEL_SCORE.KEY_IDENTIFIER_MISMATCH;
         }
     }
 
@@ -169,19 +216,19 @@ export function scoreModelMatch(
     if (requestedVersion) {
         const modelStr = `${family} ${name} ${id}`;
         if (modelStr.includes(requestedVersion)) {
-            score += 50; // Strong bonus for version match
+            score += MODEL_SCORE.VERSION_MATCH;
         } else {
             // Check if model has a different version - penalize
             const modelVersionMatch = modelStr.match(/(\d+)\.(\d+)/);
             if (modelVersionMatch) {
-                score -= 20; // Penalty for wrong version
+                score += MODEL_SCORE.VERSION_MISMATCH;
             }
         }
     }
 
     // Bonus for family containment
-    if (requestedLower.includes(family) && family.length > 2) {
-        score += 5;
+    if (requestedLower.includes(family) && family.length >= MODEL_SCORE.MIN_FAMILY_LENGTH) {
+        score += MODEL_SCORE.FAMILY_CONTAINMENT;
     }
 
     return score;

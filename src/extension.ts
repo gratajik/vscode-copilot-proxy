@@ -9,6 +9,8 @@ import {
     MAX_REQUEST_BODY_SIZE,
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
+    MODEL_CACHE_TTL_MS,
+    CORS_HEADERS,
     parseRequestBody,
     validateRequest,
     createErrorResponse,
@@ -55,6 +57,7 @@ function sendErrorResponse(
 
 // Cache for available models
 let cachedModels: vscode.LanguageModelChat[] = [];
+let modelsLastRefreshed = 0;
 
 let isRefreshing = false;
 
@@ -76,6 +79,7 @@ async function refreshModels(): Promise<vscode.LanguageModelChat[]> {
             setTimeout(() => reject(new Error('Model refresh timed out')), timeoutMs)
         );
         cachedModels = await Promise.race([modelsPromise, timeoutPromise]);
+        modelsLastRefreshed = Date.now();
         log(`Found ${cachedModels.length} models`);
         return cachedModels;
     } catch (error) {
@@ -100,10 +104,16 @@ async function getModel(requestedModel?: string): Promise<vscode.LanguageModelCh
 }
 
 function convertToVSCodeMessages(messages: ChatMessage[]): vscode.LanguageModelChatMessage[] {
+    // Check for system messages and log warning
+    const systemMessageCount = messages.filter(m => m.role === 'system').length;
+    if (systemMessageCount > 0) {
+        log(`Warning: ${systemMessageCount} system message(s) converted to user role (VS Code LM API limitation)`);
+    }
+
     return messages.map(msg => {
         switch (msg.role) {
             case 'system':
-                // VS Code LM API doesn't have a system role, prepend to first user message or use as user
+                // VS Code LM API doesn't have a system role - convert to user message
                 return vscode.LanguageModelChatMessage.User(msg.content);
             case 'assistant':
                 return vscode.LanguageModelChatMessage.Assistant(msg.content);
@@ -317,7 +327,14 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 }
 
 async function handleModels(res: http.ServerResponse): Promise<void> {
-    await refreshModels();
+    // Only refresh if cache is stale (TTL expired) or empty
+    const cacheAge = Date.now() - modelsLastRefreshed;
+    if (cachedModels.length === 0 || cacheAge > MODEL_CACHE_TTL_MS) {
+        await refreshModels();
+        log(`Models cache refreshed (was ${cacheAge}ms old)`);
+    } else {
+        log(`Using cached models (${cacheAge}ms old, TTL: ${MODEL_CACHE_TTL_MS}ms)`);
+    }
 
     const models = cachedModels.map(model => ({
         id: model.id,
@@ -359,12 +376,7 @@ function createServer(_port: number): http.Server {
     return http.createServer(async (req, res) => {
         // Handle CORS preflight
         if (req.method === 'OPTIONS') {
-            res.writeHead(200, {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-                'Access-Control-Max-Age': '86400'
-            });
+            res.writeHead(200, CORS_HEADERS);
             res.end();
             return;
         }
