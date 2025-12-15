@@ -22,7 +22,8 @@
       "Bash(npm run lint)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File scripts/create-release.ps1)"
     ]
   }
 }
