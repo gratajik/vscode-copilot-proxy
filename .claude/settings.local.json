@@ -24,7 +24,12 @@
       "Bash(git commit:*)",
       "Bash(curl:*)",
       "Bash(powershell -ExecutionPolicy Bypass -File scripts/create-release.ps1)",
-      "Bash(npm audit:*)"
+      "Bash(npm audit:*)",
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Bash(gh release create:*)",
+      "Bash(vscode-copilot-proxy-0.0.2.vsix )",
+      "Bash(release/copilot-proxy-v0.0.2.zip)"
     ]
   }
 }
