@@ -18,7 +18,8 @@
       "Bash(code --install-extension:*)",
       "Bash(npm test)",
       "Bash(npm uninstall:*)",
-      "Bash(npx mocha --require ts-node/register \"src/test/**/*.test.ts\")"
+      "Bash(npx mocha --require ts-node/register \"src/test/**/*.test.ts\")",
+      "Bash(npm run lint)"
     ]
   }
 }
