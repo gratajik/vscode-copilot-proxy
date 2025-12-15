@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <!-- Gradient for background -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e1e2e"/>
+      <stop offset="100%" style="stop-color:#2d2d44"/>
+    </linearGradient>
+    <!-- Gradient for tower -->
+    <linearGradient id="towerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#60a5fa"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+    <!-- Glow effect -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="8" y="8" width="240" height="240" rx="32" ry="32" fill="url(#bgGrad)"/>
+
+  <!-- Signal waves (outer to inner) -->
+  <path d="M 60 95 Q 60 60, 95 60" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.4" stroke-linecap="round"/>
+  <path d="M 75 105 Q 75 80, 100 80" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.6" stroke-linecap="round"/>
+  <path d="M 90 115 Q 90 100, 105 100" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.8" stroke-linecap="round"/>
+
+  <!-- Signal waves (right side) -->
+  <path d="M 196 95 Q 196 60, 161 60" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.4" stroke-linecap="round"/>
+  <path d="M 181 105 Q 181 80, 156 80" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.6" stroke-linecap="round"/>
+  <path d="M 166 115 Q 166 100, 151 100" stroke="#4ade80" stroke-width="6" fill="none" opacity="0.8" stroke-linecap="round"/>
+
+  <!-- Radio tower -->
+  <g filter="url(#glow)">
+    <!-- Tower base/legs -->
+    <path d="M 100 200 L 120 120 L 128 120 L 128 200 Z" fill="url(#towerGrad)"/>
+    <path d="M 156 200 L 136 120 L 128 120 L 128 200 Z" fill="url(#towerGrad)"/>
+
+    <!-- Tower cross beams -->
+    <rect x="108" y="145" width="40" height="6" fill="#60a5fa" rx="2"/>
+    <rect x="112" y="165" width="32" height="6" fill="#60a5fa" rx="2"/>
+    <rect x="116" y="185" width="24" height="6" fill="#60a5fa" rx="2"/>
+
+    <!-- Antenna top -->
+    <rect x="124" y="85" width="8" height="40" fill="url(#towerGrad)" rx="2"/>
+
+    <!-- Antenna tip with glow -->
+    <circle cx="128" cy="75" r="12" fill="#4ade80"/>
+    <circle cx="128" cy="75" r="8" fill="#86efac"/>
+    <circle cx="128" cy="75" r="4" fill="#ffffff"/>
+  </g>
+
+  <!-- Small connection dots -->
+  <circle cx="55" cy="180" r="8" fill="#f472b6" opacity="0.8"/>
+  <circle cx="201" cy="180" r="8" fill="#f472b6" opacity="0.8"/>
+
+  <!-- Connection lines to tower -->
+  <line x1="63" y1="176" x2="100" y2="195" stroke="#f472b6" stroke-width="3" opacity="0.6" stroke-dasharray="6,4"/>
+  <line x1="193" y1="176" x2="156" y2="195" stroke="#f472b6" stroke-width="3" opacity="0.6" stroke-dasharray="6,4"/>
+</svg>

@@ -3,6 +3,7 @@
   "displayName": "VS Code Copilot Proxy",
   "publisher": "RatajikSoftware",
   "description": "Proxy requests from external agents through VS Code Copilot models",
+  "icon": "images/icon.png",
   "version": "0.0.2",
   "repository": {
     "type": "git",
@@ -74,6 +75,7 @@
     "chai": "^4.5.0",
     "eslint": "^8.56.0",
     "mocha": "^11.7.5",
+    "sharp": "^0.34.5",
     "sinon": "^21.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"
