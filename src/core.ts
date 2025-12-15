@@ -10,16 +10,24 @@
 export const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024;
 
 /**
- * Request timeout in milliseconds (30 seconds).
+ * Request timeout in milliseconds (2 minutes).
  * Prevents connection exhaustion from slow requests.
+ * Set higher for LLM responses which can take time.
  */
-export const REQUEST_TIMEOUT_MS = 30000;
+export const REQUEST_TIMEOUT_MS = 120000;
 
 /**
- * Server keep-alive timeout in milliseconds (5 seconds).
+ * Server keep-alive timeout in milliseconds (65 seconds).
  * Controls how long to keep idle connections open.
+ * Set higher than typical client timeout (60s) to prevent premature disconnects.
  */
-export const KEEP_ALIVE_TIMEOUT_MS = 5000;
+export const KEEP_ALIVE_TIMEOUT_MS = 65000;
+
+/**
+ * Headers timeout in milliseconds (60 seconds).
+ * How long to wait for HTTP headers before timing out.
+ */
+export const HEADERS_TIMEOUT_MS = 60000;
 
 /**
  * Model cache TTL in milliseconds (60 seconds).

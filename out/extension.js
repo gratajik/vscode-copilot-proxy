@@ -353,6 +353,7 @@ async function handleChatCompletion(req, res) {
                     };
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
+                        'Connection': 'close',
                         ...(0, core_1.getCorsHeaders)(req.headers.origin)
                     });
                     res.end(JSON.stringify(openAIResponse));
@@ -495,6 +496,17 @@ async function startServer() {
     // Configure server-level timeouts
     server.timeout = core_1.REQUEST_TIMEOUT_MS;
     server.keepAliveTimeout = core_1.KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = core_1.HEADERS_TIMEOUT_MS;
+    // Track active connections for debugging
+    let connectionCount = 0;
+    server.on('connection', (socket) => {
+        connectionCount++;
+        log(`New connection (${connectionCount} active)`);
+        socket.on('close', () => {
+            connectionCount--;
+            log(`Connection closed (${connectionCount} active)`);
+        });
+    });
     server.listen(port, '127.0.0.1', async () => {
         log(`Server started on 127.0.0.1:${port}`);
         log(`Endpoint: http://127.0.0.1:${port}/v1/chat/completions`);

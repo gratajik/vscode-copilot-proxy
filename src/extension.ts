@@ -10,6 +10,7 @@ import {
     MAX_REQUEST_BODY_SIZE,
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
+    HEADERS_TIMEOUT_MS,
     MODEL_CACHE_TTL_MS,
     getCorsHeaders,
     isLocalhostOrigin,
@@ -383,6 +384,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
+                        'Connection': 'close',
                         ...getCorsHeaders(req.headers.origin)
                     });
                     res.end(JSON.stringify(openAIResponse));
@@ -535,6 +537,18 @@ async function startServer(): Promise<void> {
     // Configure server-level timeouts
     server.timeout = REQUEST_TIMEOUT_MS;
     server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = HEADERS_TIMEOUT_MS;
+
+    // Track active connections for debugging
+    let connectionCount = 0;
+    server.on('connection', (socket) => {
+        connectionCount++;
+        log(`New connection (${connectionCount} active)`);
+        socket.on('close', () => {
+            connectionCount--;
+            log(`Connection closed (${connectionCount} active)`);
+        });
+    });
 
     server.listen(port, '127.0.0.1', async () => {
         log(`Server started on 127.0.0.1:${port}`);
