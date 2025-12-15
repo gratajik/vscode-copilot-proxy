@@ -28,8 +28,37 @@ export const KEEP_ALIVE_TIMEOUT_MS = 5000;
 export const MODEL_CACHE_TTL_MS = 60000;
 
 /**
- * CORS headers for HTTP responses.
- * Allows all origins since server is localhost-only.
+ * Check if an origin is a localhost origin.
+ * Allows http://localhost:* and http://127.0.0.1:*
+ */
+export function isLocalhostOrigin(origin: string | undefined): boolean {
+    if (!origin) return true; // No origin = direct API call (curl, etc.)
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
+/**
+ * Get CORS headers for a request.
+ * Only allows localhost origins to prevent malicious websites from accessing the API.
+ */
+export function getCorsHeaders(origin: string | undefined): Record<string, string> {
+    const headers: Record<string, string> = {
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Max-Age': '86400'
+    };
+
+    // Only set Allow-Origin for localhost origins
+    if (isLocalhostOrigin(origin)) {
+        headers['Access-Control-Allow-Origin'] = origin || '*';
+    }
+    // If not localhost origin, don't set Allow-Origin - browser will block
+
+    return headers;
+}
+
+/**
+ * CORS headers for HTTP responses (legacy - use getCorsHeaders for origin validation).
+ * @deprecated Use getCorsHeaders(req.headers.origin) instead for origin validation.
  */
 export const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',

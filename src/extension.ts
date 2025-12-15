@@ -10,7 +10,8 @@ import {
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
     MODEL_CACHE_TTL_MS,
-    CORS_HEADERS,
+    getCorsHeaders,
+    isLocalhostOrigin,
     parseRequestBody,
     validateRequest,
     createErrorResponse,
@@ -202,7 +203,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
-                    'Access-Control-Allow-Origin': '*'
+                    ...getCorsHeaders(req.headers.origin)
                 });
 
                 const id = generateId();
@@ -306,7 +307,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
+                        ...getCorsHeaders(req.headers.origin)
                     });
                     res.end(JSON.stringify(openAIResponse));
                 } catch (error) {
@@ -326,7 +327,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
     });
 }
 
-async function handleModels(res: http.ServerResponse): Promise<void> {
+async function handleModels(res: http.ServerResponse, corsHeaders: Record<string, string>): Promise<void> {
     // Only refresh if cache is stale (TTL expired) or empty
     const cacheAge = Date.now() - modelsLastRefreshed;
     if (cachedModels.length === 0 || cacheAge > MODEL_CACHE_TTL_MS) {
@@ -353,7 +354,7 @@ async function handleModels(res: http.ServerResponse): Promise<void> {
 
     res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        ...corsHeaders
     });
     res.end(JSON.stringify({
         object: 'list',
@@ -361,10 +362,10 @@ async function handleModels(res: http.ServerResponse): Promise<void> {
     }));
 }
 
-function handleHealth(res: http.ServerResponse): void {
+function handleHealth(res: http.ServerResponse, corsHeaders: Record<string, string>): void {
     res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        ...corsHeaders
     });
     res.end(JSON.stringify({
         status: 'ok',
@@ -374,10 +375,21 @@ function handleHealth(res: http.ServerResponse): void {
 
 function createServer(_port: number): http.Server {
     return http.createServer(async (req, res) => {
+        const origin = req.headers.origin;
+        const corsHeaders = getCorsHeaders(origin);
+
         // Handle CORS preflight
         if (req.method === 'OPTIONS') {
-            res.writeHead(200, CORS_HEADERS);
+            res.writeHead(200, corsHeaders);
             res.end();
+            return;
+        }
+
+        // Block requests from non-localhost origins (browser security)
+        if (origin && !isLocalhostOrigin(origin)) {
+            log(`Blocked request from non-localhost origin: ${origin}`);
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'Forbidden: non-localhost origin', type: 'forbidden' } }));
             return;
         }
 
@@ -388,9 +400,9 @@ function createServer(_port: number): http.Server {
         if (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/chat/completions')) {
             await handleChatCompletion(req, res);
         } else if (req.method === 'GET' && (url === '/v1/models' || url === '/models')) {
-            await handleModels(res);
+            await handleModels(res, corsHeaders);
         } else if (req.method === 'GET' && (url === '/health' || url === '/')) {
-            handleHealth(res);
+            handleHealth(res, corsHeaders);
         } else {
             sendErrorResponse(res, 404, `Unknown endpoint: ${req.method} ${url}`, 'not_found');
         }
@@ -415,8 +427,8 @@ async function startServer(): Promise<void> {
     server.timeout = REQUEST_TIMEOUT_MS;
     server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
 
-    server.listen(port, async () => {
-        log(`Server started on port ${port}`);
+    server.listen(port, '127.0.0.1', async () => {
+        log(`Server started on 127.0.0.1:${port}`);
         log(`Endpoint: http://localhost:${port}/v1/chat/completions`);
 
         // Log available models after server starts
