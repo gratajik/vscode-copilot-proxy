@@ -32,13 +32,13 @@ const MAX_REQUEST_LOGS = 50;
 let requestLogs: RequestLogEntry[] = [];
 
 function addRequestLog(entry: RequestLogEntry): void {
+    // Always collect logs
     requestLogs.unshift(entry);
     if (requestLogs.length > MAX_REQUEST_LOGS) {
         requestLogs = requestLogs.slice(0, MAX_REQUEST_LOGS);
     }
-    // Update panel if open and logging is enabled
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    if (config.get<boolean>('logRequestsToUI', false)) {
+    // Always update panel if open (UI decides whether to display logs based on setting)
+    if (statusPanel) {
         updateStatusPanel();
     }
 }
@@ -214,15 +214,16 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
             const totalChars = request.messages.reduce((sum, m) => sum + m.content.length, 0);
             const estimatedTokens = Math.ceil(totalChars / 4); // rough estimate: ~4 chars per token
 
-            log(`Request: ${messageCount} messages, ~${totalChars} chars (~${estimatedTokens} tokens), model: ${request.model || 'default'}, stream: ${request.stream ?? false}`);
+            const requestedModel = request.model || '(default)';
 
             if (!model) {
-                logError('No language models available');
+                logError(`No language models available (requested: ${requestedModel})`);
                 sendErrorResponse(res, 503, 'No language models available. Make sure GitHub Copilot is installed and authenticated.', 'service_unavailable');
                 return;
             }
 
-            log(`Using model: ${model.name} (${model.id}), max input: ${model.maxInputTokens} tokens`);
+            log(`Request: ${messageCount} msgs, ~${estimatedTokens} tokens, stream: ${request.stream ?? false}`);
+            log(`Model: ${requestedModel} → ${model.name} (${model.id})`);
 
             const vsCodeMessages = convertToVSCodeMessages(request.messages);
 
@@ -319,10 +320,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         status: 'success'
                     });
                 } catch (error) {
-                    logError('Streaming request failed', error);
+                    const durationMs = Date.now() - startTime;
+                    logError(`Streaming request failed after ${durationMs}ms`, error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                     const errorStack = error instanceof Error ? error.stack : String(error);
-                    logRaw('ERROR (stream)', `${errorMessage}\n\nStack:\n${errorStack}`);
+                    logRaw('ERROR (stream)', `${errorMessage}\n\nDuration: ${durationMs}ms\n\nStack:\n${errorStack}`);
                     // Send error in proper SSE format with consistent error structure
                     res.write(`data: ${JSON.stringify(createErrorResponse(errorMessage, 'server_error', 500))}\n\n`);
                     res.end();
@@ -404,10 +406,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         status: 'success'
                     });
                 } catch (error) {
-                    logError('Non-streaming request failed', error);
+                    const durationMs = Date.now() - startTime;
+                    logError(`Non-streaming request failed after ${durationMs}ms`, error);
                     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
                     const errorStack = error instanceof Error ? error.stack : String(error);
-                    logRaw('ERROR', `${errorMessage}\n\nStack:\n${errorStack}`);
+                    logRaw('ERROR', `${errorMessage}\n\nDuration: ${durationMs}ms\n\nStack:\n${errorStack}`);
                     sendErrorResponse(res, 500, errorMessage, 'server_error');
 
                     // Log error to UI
@@ -521,16 +524,16 @@ function createServer(_port: number): http.Server {
 }
 
 async function startServer(): Promise<void> {
+    log('startServer() called');
     if (server) {
+        log('Server already running, skipping');
         vscode.window.showInformationMessage('Copilot Proxy server is already running');
         return;
     }
 
     const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get<number>('port', 8080);
-
-    // Refresh models before starting
-    refreshModels(); // Non-blocking
+    log(`Attempting to start on port ${port}`);
 
     server = createServer(port);
 
@@ -556,8 +559,10 @@ async function startServer(): Promise<void> {
 
         // Log available models after server starts
         const models = await refreshModels();
+        log(`Loaded ${models.length} model(s):`);
         for (const m of models) {
-            log(`  Model: ${m.name} (${m.id}) - max ${m.maxInputTokens} tokens`);
+            const ctx = m.maxInputTokens?.toLocaleString() ?? '?';
+            log(`  - ${m.name} (${m.id}): ${ctx} tokens`);
         }
 
         vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
@@ -567,7 +572,8 @@ async function startServer(): Promise<void> {
 
     server.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code === 'EADDRINUSE') {
-            log(`Port ${port} is already in use (another VS Code instance may be serving)`);
+            logError(`Port ${port} is already in use`, error);
+            vscode.window.showErrorMessage(`Port ${port} is already in use. Try a different port or close other VS Code instances.`);
         } else {
             logError('Failed to start server', error);
             vscode.window.showErrorMessage(`Failed to start server: ${error.message}`);
@@ -1379,8 +1385,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // Auto-start if configured
     const config = vscode.workspace.getConfiguration('copilotProxy');
-    if (config.get<boolean>('autoStart', true)) {
-        startServer();
+    const autoStart = config.get<boolean>('autoStart', true);
+    log(`Auto-start: ${autoStart}`);
+    if (autoStart) {
+        log('Calling startServer...');
+        startServer().catch(err => logError('startServer failed', err));
     }
 
     log('Extension activated');
