@@ -66,6 +66,45 @@ VS Code extension exposing OpenAI-compatible HTTP API via `vscode.lm` API.
 
 **After work:** Update TASKS.md with completion timestamps
 
+## CRITICAL: Check Before Implementing
+
+Before implementing any feature, always:
+
+1. **Check Feature Inventory** - `docs/FEATURE_INVENTORY.md`
+   - Is this feature already listed?
+   - What's its current status?
+
+2. **Search Codebase** - `grep -rn "FeatureName" src/`
+   - Does similar code already exist?
+   - Are there partial implementations?
+
+3. **Check Feature Docs** - `docs/features/`
+   - Is there a design.md for this feature?
+   - What was the original plan?
+
+## CRITICAL: Update After Implementing
+
+After completing any feature work:
+
+1. **Update FEATURE_INVENTORY.md**
+   - Add to "Recently Added" section if new
+   - Update status if changed
+
+2. **Update Task Docs**
+   - Mark tasks as `[x]` complete
+   - Add completion timestamps
+   - Add duration if tracked
+
+3. **Create Feature Doc** (if significant - 3+ files)
+   - Create `docs/features/<name>/design.md`
+   - Create `docs/features/<name>/TASKS.md`
+
+## Why This Matters
+
+- **Prevents duplicating** existing functionality
+- **Prevents missing** partial implementations
+- **Prevents forgetting** what was added between sessions
+
 ## Markdown Rules
 
 - No em dashes (`—`) - use `-` or `--`

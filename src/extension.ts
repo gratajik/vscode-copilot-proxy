@@ -1,3 +1,14 @@
+/**
+ * VS Code Copilot Proxy Extension
+ *
+ * Exposes an OpenAI-compatible HTTP API that proxies requests through
+ * VS Code's Language Model API (GitHub Copilot).
+ *
+ * @see docs/features/copilot-proxy/design.md - Core proxy architecture
+ * @see docs/features/webview-status-panel/design.md - Status panel UI
+ * @see docs/features/security-hardening/design.md - Security features
+ */
+
 import * as vscode from 'vscode';
 import * as http from 'http';
 import {

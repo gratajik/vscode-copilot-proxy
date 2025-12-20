@@ -72,7 +72,9 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "mocha --require ts-node/register 'src/test/**/*.test.ts'",
-    "test:coverage": "nyc npm run test"
+    "test:coverage": "nyc npm run test",
+    "docs:check": "node scripts/check-docs.js",
+    "docs:inventory": "node scripts/update-inventory.js"
   },
   "devDependencies": {
     "@types/chai": "^4.3.20",
