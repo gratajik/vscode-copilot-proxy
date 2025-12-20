@@ -80,10 +80,93 @@ export const CORS_HEADERS = {
     'Access-Control-Max-Age': '86400'
 } as const;
 
-export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant';
-    content: string;
+// ============================================================================
+// Tool/Function Calling Types
+// @see docs/features/tool-calling/design.md
+// ============================================================================
+
+/**
+ * OpenAI-compatible tool definition.
+ */
+export interface Tool {
+    type: 'function';
+    function: ToolFunction;
 }
+
+/**
+ * Function definition within a tool.
+ */
+export interface ToolFunction {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>; // JSON Schema
+}
+
+/**
+ * Tool call made by the model.
+ */
+export interface ToolCall {
+    id: string;
+    type: 'function';
+    function: {
+        name: string;
+        arguments: string; // JSON string
+    };
+}
+
+/**
+ * Tool call delta for streaming responses.
+ */
+export interface ToolCallDelta {
+    index: number;
+    id?: string;           // Only in first chunk for this tool call
+    type?: 'function';     // Only in first chunk
+    function?: {
+        name?: string;     // Only in first chunk
+        arguments?: string; // Streamed incrementally
+    };
+}
+
+/**
+ * Tool information returned by GET /v1/tools.
+ */
+export interface ToolInfo {
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+    tags?: readonly string[] | string[];
+}
+
+/**
+ * Response format for GET /v1/tools endpoint.
+ */
+export interface ToolsResponse {
+    object: 'list';
+    data: ToolInfo[];
+}
+
+// ============================================================================
+// Chat Message Types
+// ============================================================================
+
+export interface ChatMessage {
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string | null;
+    // For assistant messages with tool calls
+    tool_calls?: ToolCall[];
+    // For tool result messages
+    tool_call_id?: string;
+    name?: string; // Tool name for tool role messages
+}
+
+/**
+ * Tool choice options for chat completions.
+ */
+export type ToolChoice =
+    | 'none'
+    | 'auto'
+    | 'required'
+    | { type: 'function'; function: { name: string } };
 
 export interface ChatCompletionRequest {
     model?: string;
@@ -91,6 +174,13 @@ export interface ChatCompletionRequest {
     temperature?: number;
     max_tokens?: number;
     stream?: boolean;
+    // Tool calling fields
+    tools?: Tool[];
+    tool_choice?: ToolChoice;
+    // Proxy-specific tool options
+    use_vscode_tools?: boolean;      // Include all VS Code registered tools
+    tool_execution?: 'none' | 'auto'; // Server-side tool execution mode
+    max_tool_rounds?: number;         // Max tool execution iterations (default: 10)
 }
 
 export interface OpenAIResponse {
@@ -102,9 +192,10 @@ export interface OpenAIResponse {
         index: number;
         message: {
             role: string;
-            content: string;
+            content: string | null;
+            tool_calls?: ToolCall[];
         };
-        finish_reason: string;
+        finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter';
     }[];
     usage: {
         prompt_tokens: number;
@@ -123,8 +214,9 @@ export interface StreamChunk {
         delta: {
             role?: string;
             content?: string;
+            tool_calls?: ToolCallDelta[];
         };
-        finish_reason: string | null;
+        finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
     }[];
 }
 
@@ -195,7 +287,7 @@ export function calculateContextSize(messages: ChatMessage[]): {
     estimatedTokens: number;
 } {
     const messageCount = messages.length;
-    const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+    const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
     const estimatedTokens = estimateTokens(totalChars);
     return { messageCount, totalChars, estimatedTokens };
 }
@@ -362,7 +454,7 @@ export function createOpenAIResponse(
                 role: 'assistant',
                 content
             },
-            finish_reason: 'stop'
+            finish_reason: 'stop' as const
         }],
         usage: {
             prompt_tokens: 0,
@@ -380,7 +472,7 @@ export function createStreamChunk(
     model: string,
     content?: string,
     role?: string,
-    finishReason: string | null = null,
+    finishReason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null = null,
     created?: number
 ): StreamChunk {
     return {
@@ -439,11 +531,43 @@ export function validateRequest(request: ChatCompletionRequest): string | null {
     }
     for (let i = 0; i < request.messages.length; i++) {
         const msg = request.messages[i];
-        if (!msg.role || !['system', 'user', 'assistant'].includes(msg.role)) {
-            return `messages[${i}].role must be one of: system, user, assistant`;
+        if (!msg.role || !['system', 'user', 'assistant', 'tool'].includes(msg.role)) {
+            return `messages[${i}].role must be one of: system, user, assistant, tool`;
         }
-        if (typeof msg.content !== 'string') {
-            return `messages[${i}].content must be a string`;
+        // content can be null for assistant messages with tool_calls
+        if (msg.content !== null && typeof msg.content !== 'string') {
+            return `messages[${i}].content must be a string or null`;
+        }
+        // Validate tool role messages
+        if (msg.role === 'tool') {
+            if (!msg.tool_call_id || typeof msg.tool_call_id !== 'string') {
+                return `messages[${i}] with role 'tool' must have tool_call_id`;
+            }
+        }
+        // Validate assistant messages with tool_calls
+        if (msg.role === 'assistant' && msg.tool_calls) {
+            if (!Array.isArray(msg.tool_calls)) {
+                return `messages[${i}].tool_calls must be an array`;
+            }
+            for (let j = 0; j < msg.tool_calls.length; j++) {
+                const tc = msg.tool_calls[j];
+                if (!tc.id || typeof tc.id !== 'string') {
+                    return `messages[${i}].tool_calls[${j}].id must be a string`;
+                }
+                if (tc.type !== 'function') {
+                    return `messages[${i}].tool_calls[${j}].type must be 'function'`;
+                }
+                if (!tc.function?.name) {
+                    return `messages[${i}].tool_calls[${j}].function.name is required`;
+                }
+            }
+        }
+    }
+    // Validate tools array if present
+    if (request.tools !== undefined) {
+        const toolsError = validateTools(request.tools);
+        if (toolsError) {
+            return toolsError;
         }
     }
     return null;
@@ -471,4 +595,148 @@ export function formatErrorMessage(message: string, error?: unknown): string {
     return errorDetails
         ? `[${formatTimestamp()}] ERROR: ${message} - ${errorDetails}`
         : `[${formatTimestamp()}] ERROR: ${message}`;
+}
+
+// ============================================================================
+// Tool/Function Calling Helper Functions
+// @see docs/features/tool-calling/design.md
+// ============================================================================
+
+/**
+ * Default maximum tool execution rounds for auto-execute mode.
+ */
+export const DEFAULT_MAX_TOOL_ROUNDS = 10;
+
+/**
+ * Generates a unique tool call ID.
+ * Format: call_<random_string>
+ */
+export function generateToolCallId(): string {
+    return 'call_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
+/**
+ * Validates a tools array from a request.
+ * Returns null if valid, error message if invalid.
+ */
+export function validateTools(tools: unknown): string | null {
+    if (!Array.isArray(tools)) {
+        return 'tools must be an array';
+    }
+
+    for (let i = 0; i < tools.length; i++) {
+        const tool = tools[i];
+        if (!tool || typeof tool !== 'object') {
+            return `tools[${i}] must be an object`;
+        }
+        if (tool.type !== 'function') {
+            return `tools[${i}].type must be 'function'`;
+        }
+        if (!tool.function || typeof tool.function !== 'object') {
+            return `tools[${i}].function must be an object`;
+        }
+        if (typeof tool.function.name !== 'string' || tool.function.name.length === 0) {
+            return `tools[${i}].function.name must be a non-empty string`;
+        }
+        // parameters is optional, but if provided must be an object (JSON Schema)
+        if (tool.function.parameters !== undefined && typeof tool.function.parameters !== 'object') {
+            return `tools[${i}].function.parameters must be an object (JSON Schema)`;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Validates a tool role message.
+ * Returns null if valid, error message if invalid.
+ */
+export function validateToolMessage(message: ChatMessage): string | null {
+    if (message.role === 'tool') {
+        if (!message.tool_call_id || typeof message.tool_call_id !== 'string') {
+            return 'tool role message must have tool_call_id';
+        }
+    }
+    return null;
+}
+
+/**
+ * Creates an OpenAI-format response object with tool calls.
+ */
+export function createOpenAIResponseWithTools(
+    id: string,
+    model: string,
+    content: string | null,
+    toolCalls: ToolCall[],
+    created?: number
+): OpenAIResponse {
+    return {
+        id,
+        object: 'chat.completion',
+        created: created ?? Math.floor(Date.now() / 1000),
+        model,
+        choices: [{
+            index: 0,
+            message: {
+                role: 'assistant',
+                content,
+                tool_calls: toolCalls.length > 0 ? toolCalls : undefined
+            },
+            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop'
+        }],
+        usage: {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0
+        }
+    };
+}
+
+/**
+ * Creates a streaming chunk with tool call deltas.
+ */
+export function createStreamChunkWithTools(
+    id: string,
+    model: string,
+    toolCallDeltas: ToolCallDelta[],
+    finishReason: 'stop' | 'tool_calls' | null = null,
+    created?: number
+): StreamChunk {
+    return {
+        id,
+        object: 'chat.completion.chunk',
+        created: created ?? Math.floor(Date.now() / 1000),
+        model,
+        choices: [{
+            index: 0,
+            delta: {
+                tool_calls: toolCallDeltas.length > 0 ? toolCallDeltas : undefined
+            },
+            finish_reason: finishReason
+        }]
+    };
+}
+
+/**
+ * Filters tools by tags (all tags must match).
+ */
+export function filterToolsByTags(tools: ToolInfo[], tags: string[]): ToolInfo[] {
+    if (tags.length === 0) return tools;
+    return tools.filter(tool =>
+        tags.every(tag => tool.tags?.includes(tag))
+    );
+}
+
+/**
+ * Filters tools by name pattern with wildcards.
+ * Supports * as wildcard (e.g., "get_*" matches "get_weather").
+ */
+export function filterToolsByName(tools: ToolInfo[], pattern: string): ToolInfo[] {
+    if (!pattern) return tools;
+    // Convert wildcard pattern to regex
+    const regexPattern = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape special chars except *
+        .replace(/\*/g, '.*'); // Convert * to .*
+    const regex = new RegExp(`^${regexPattern}$`, 'i');
+    return tools.filter(tool => regex.test(tool.name));
 }
