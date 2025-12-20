@@ -1,6 +1,11 @@
 /**
  * Core utility functions for the Copilot Proxy extension.
  * These are pure functions that can be easily unit tested.
+ *
+ * @see docs/features/copilot-proxy/design.md - Core proxy architecture
+ * @see docs/features/code-health-refactor/design.md - Refactoring history
+ * @see docs/features/security-hardening/design.md - Security features
+ * @see docs/SOURCE_MAPPING.md - Source file to feature mapping
  */
 
 /**
