@@ -32,7 +32,12 @@
       "Bash(release/copilot-proxy-v0.0.2.zip)",
       "Bash(gh release upload:*)",
       "Bash(vsce publish)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "WebSearch",
+      "WebFetch(domain:code.visualstudio.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }
