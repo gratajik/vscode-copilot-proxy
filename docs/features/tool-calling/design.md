@@ -139,7 +139,7 @@ interface ChatCompletionRequest {
     // NEW: Proxy-specific tool options
     use_vscode_tools?: boolean;      // Include all VS Code registered tools
     tool_execution?: 'none' | 'auto'; // Server-side tool execution mode
-    max_tool_rounds?: number;         // Max tool execution iterations (default: 10)
+    max_tool_rounds?: number;         // Max iterations (default: 10, 0 = unlimited)
 }
 
 interface Tool {

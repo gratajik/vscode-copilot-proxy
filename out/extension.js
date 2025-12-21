@@ -284,9 +284,10 @@ async function runAutoExecuteLoop(model, initialMessages, options, maxRounds, ca
     const messages = [...initialMessages];
     let totalToolCalls = 0;
     let round = 0;
-    while (round < maxRounds) {
+    const unlimited = maxRounds === 0;
+    while (unlimited || round < maxRounds) {
         round++;
-        log(`Auto-execute round ${round}/${maxRounds}`);
+        log(`Auto-execute round ${round}${unlimited ? '' : `/${maxRounds}`}`);
         const response = await model.sendRequest(messages, options, cancellationToken);
         let content = '';
         const toolCalls = [];

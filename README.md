@@ -412,7 +412,7 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 | `tool_choice` | string | `"auto"` | `"none"`, `"auto"`, or `"required"` |
 | `use_vscode_tools` | boolean | `false` | Include all VS Code registered tools |
 | `tool_execution` | string | `"none"` | `"none"` (pass-through) or `"auto"` (proxy executes) |
-| `max_tool_rounds` | number | `10` | Max tool execution iterations in auto mode |
+| `max_tool_rounds` | number | `10` | Max iterations in auto mode (0 = unlimited) |
 
 See `examples/vscode_llm_tools_auto.py` for a complete auto-execute example.
 
