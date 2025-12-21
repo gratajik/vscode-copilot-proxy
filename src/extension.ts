@@ -13,24 +13,36 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import {
     ChatMessage,
+    ChatCompletionRequest,
     OpenAIResponse,
     StreamChunk,
     ModelInfo,
     SettingsInfo,
     RequestLogEntry,
+    Tool,
+    ToolCall,
+    ToolCallDelta,
+    ToolInfo,
+    ToolsResponse,
     MAX_REQUEST_BODY_SIZE,
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
     HEADERS_TIMEOUT_MS,
     MODEL_CACHE_TTL_MS,
+    DEFAULT_MAX_TOOL_ROUNDS,
     getCorsHeaders,
     isLocalhostOrigin,
     parseRequestBody,
     validateRequest,
     createErrorResponse,
+    createOpenAIResponseWithTools,
+    createStreamChunkWithTools,
     generateId,
+    generateToolCallId,
     escapeHtml,
-    findBestModel
+    findBestModel,
+    filterToolsByTags,
+    filterToolsByName
 } from './core';
 
 let server: http.Server | null = null;
@@ -145,6 +157,270 @@ async function getModel(requestedModel?: string): Promise<vscode.LanguageModelCh
     return findBestModel(requestedModel, cachedModels, defaultModel);
 }
 
+// ============================================================================
+// Tool/Function Calling Support
+// @see docs/features/tool-calling/design.md
+// ============================================================================
+
+/**
+ * Gets available tools from VS Code's lm.tools API.
+ */
+async function getAvailableTools(): Promise<ToolInfo[]> {
+    try {
+        // vscode.lm.tools is an array of LanguageModelToolInformation
+        const vsCodeTools = vscode.lm.tools || [];
+        return vsCodeTools.map(tool => ({
+            name: tool.name,
+            description: tool.description || '',
+            inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
+            tags: tool.tags
+        }));
+    } catch (error) {
+        logError('Failed to get available tools', error);
+        return [];
+    }
+}
+
+/**
+ * Converts OpenAI tool format to VS Code LanguageModelChatTool format.
+ */
+function convertToVSCodeTools(tools: Tool[]): vscode.LanguageModelChatTool[] {
+    return tools.map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description || '',
+        inputSchema: tool.function.parameters
+    }));
+}
+
+/**
+ * Merges request tools with VS Code tools if use_vscode_tools is enabled.
+ */
+async function mergeWithVSCodeTools(requestTools: Tool[] | undefined, useVSCodeTools: boolean): Promise<Tool[]> {
+    const tools: Tool[] = requestTools ? [...requestTools] : [];
+
+    if (useVSCodeTools) {
+        const vsCodeTools = await getAvailableTools();
+        const existingNames = new Set(tools.map(t => t.function.name));
+
+        for (const vsTool of vsCodeTools) {
+            if (!existingNames.has(vsTool.name)) {
+                tools.push({
+                    type: 'function',
+                    function: {
+                        name: vsTool.name,
+                        description: vsTool.description,
+                        parameters: vsTool.inputSchema
+                    }
+                });
+            }
+        }
+    }
+
+    return tools;
+}
+
+/**
+ * Converts a VS Code LanguageModelToolCallPart to OpenAI ToolCall format.
+ */
+function convertToolCallPart(part: vscode.LanguageModelToolCallPart): ToolCall {
+    return {
+        id: part.callId || generateToolCallId(),
+        type: 'function',
+        function: {
+            name: part.name,
+            arguments: JSON.stringify(part.input)
+        }
+    };
+}
+
+/**
+ * Executes a single tool call via VS Code's lm.invokeTool API.
+ * Returns the tool result content.
+ */
+async function executeToolCall(
+    toolCall: ToolCall,
+    cancellationToken: vscode.CancellationToken
+): Promise<{ success: boolean; content: string }> {
+    try {
+        let input: Record<string, unknown> = {};
+        try {
+            input = JSON.parse(toolCall.function.arguments);
+        } catch {
+            log(`Warning: Could not parse tool arguments for ${toolCall.function.name}`);
+        }
+
+        log(`Executing tool: ${toolCall.function.name}`);
+
+        // Use VS Code's lm.invokeTool API
+        const result = await vscode.lm.invokeTool(toolCall.function.name, {
+            input,
+            toolInvocationToken: undefined // No special token needed
+        }, cancellationToken);
+
+        // Convert result to string
+        let content = '';
+        if (result) {
+            // Result is LanguageModelToolResult - convert based on structure
+            if (Array.isArray(result)) {
+                for (const part of result) {
+                    if (part instanceof vscode.LanguageModelTextPart) {
+                        content += part.value;
+                    } else if (typeof part === 'string') {
+                        content += part;
+                    }
+                }
+            } else if (typeof result === 'object' && 'content' in result) {
+                // Handle object with content property
+                const resultContent = (result as { content?: unknown }).content;
+                if (Array.isArray(resultContent)) {
+                    for (const part of resultContent) {
+                        if (part instanceof vscode.LanguageModelTextPart) {
+                            content += part.value;
+                        } else if (typeof part === 'string') {
+                            content += part;
+                        }
+                    }
+                } else if (typeof resultContent === 'string') {
+                    content = resultContent;
+                }
+            } else if (typeof result === 'string') {
+                content = result;
+            } else {
+                // Fallback: stringify the result
+                content = JSON.stringify(result);
+            }
+        }
+
+        log(`Tool ${toolCall.function.name} completed: ${content.length} chars`);
+        return { success: true, content };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logError(`Tool ${toolCall.function.name} failed`, error);
+        return { success: false, content: `Error: ${errorMessage}` };
+    }
+}
+
+/**
+ * Runs the auto-execute loop: sends request, executes tool calls, repeats until done.
+ * Returns the final response content.
+ */
+async function runAutoExecuteLoop(
+    model: vscode.LanguageModelChat,
+    initialMessages: vscode.LanguageModelChatMessage[],
+    options: vscode.LanguageModelChatRequestOptions,
+    maxRounds: number,
+    cancellationToken: vscode.CancellationToken
+): Promise<{ content: string; toolCallsExecuted: number }> {
+    let messages = [...initialMessages];
+    let totalToolCalls = 0;
+    let round = 0;
+
+    while (round < maxRounds) {
+        round++;
+        log(`Auto-execute round ${round}/${maxRounds}`);
+
+        const response = await model.sendRequest(messages, options, cancellationToken);
+
+        let content = '';
+        const toolCalls: ToolCall[] = [];
+
+        // Process response
+        const stream = response.stream || (async function* () {
+            for await (const text of response.text) {
+                yield new vscode.LanguageModelTextPart(text);
+            }
+        })();
+
+        for await (const part of stream) {
+            if (part instanceof vscode.LanguageModelTextPart) {
+                content += part.value;
+            } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                toolCalls.push(convertToolCallPart(part));
+            }
+        }
+
+        // If no tool calls, we're done
+        if (toolCalls.length === 0) {
+            log(`Auto-execute completed after ${round} round(s), ${totalToolCalls} tool call(s)`);
+            return { content, toolCallsExecuted: totalToolCalls };
+        }
+
+        // Execute all tool calls
+        log(`Executing ${toolCalls.length} tool call(s) in round ${round}`);
+        totalToolCalls += toolCalls.length;
+
+        // Add assistant message with tool calls
+        const assistantParts: (vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart)[] = [];
+        if (content) {
+            assistantParts.push(new vscode.LanguageModelTextPart(content));
+        }
+        for (const tc of toolCalls) {
+            let input: Record<string, unknown> = {};
+            try {
+                input = JSON.parse(tc.function.arguments);
+            } catch {
+                // ignore
+            }
+            assistantParts.push(new vscode.LanguageModelToolCallPart(tc.id, tc.function.name, input));
+        }
+        messages.push(vscode.LanguageModelChatMessage.Assistant(assistantParts));
+
+        // Execute tools and add results
+        for (const toolCall of toolCalls) {
+            const result = await executeToolCall(toolCall, cancellationToken);
+            messages.push(vscode.LanguageModelChatMessage.User([
+                new vscode.LanguageModelToolResultPart(
+                    toolCall.id,
+                    [new vscode.LanguageModelTextPart(result.content)]
+                )
+            ]));
+        }
+    }
+
+    log(`Auto-execute reached max rounds (${maxRounds}), returning partial result`);
+    return { content: '[Max tool execution rounds reached]', toolCallsExecuted: totalToolCalls };
+}
+
+/**
+ * Handles GET /v1/tools endpoint.
+ */
+async function handleTools(req: http.IncomingMessage, res: http.ServerResponse, corsHeaders: Record<string, string>): Promise<void> {
+    try {
+        // Parse query parameters
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const tagsParam = url.searchParams.get('tags');
+        const nameParam = url.searchParams.get('name');
+
+        let tools = await getAvailableTools();
+
+        // Apply filters
+        if (tagsParam) {
+            const tags = tagsParam.split(',').map(t => t.trim()).filter(t => t);
+            tools = filterToolsByTags(tools, tags);
+        }
+        if (nameParam) {
+            tools = filterToolsByName(tools, nameParam);
+        }
+
+        log(`GET /v1/tools: ${tools.length} tools available`);
+
+        const response: ToolsResponse = {
+            object: 'list',
+            data: tools
+        };
+
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            ...corsHeaders
+        });
+        res.end(JSON.stringify(response));
+    } catch (error) {
+        logError('Failed to handle tools request', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        sendErrorResponse(res, 500, errorMessage, 'server_error');
+    }
+}
+
 function convertToVSCodeMessages(messages: ChatMessage[]): vscode.LanguageModelChatMessage[] {
     // Check for system messages and log warning
     const systemMessageCount = messages.filter(m => m.role === 'system').length;
@@ -156,12 +432,52 @@ function convertToVSCodeMessages(messages: ChatMessage[]): vscode.LanguageModelC
         switch (msg.role) {
             case 'system':
                 // VS Code LM API doesn't have a system role - convert to user message
-                return vscode.LanguageModelChatMessage.User(msg.content);
+                return vscode.LanguageModelChatMessage.User(msg.content || '');
+
             case 'assistant':
-                return vscode.LanguageModelChatMessage.Assistant(msg.content);
+                // Handle assistant messages with tool calls
+                if (msg.tool_calls && msg.tool_calls.length > 0) {
+                    // Create message parts: text content (if any) + tool call parts
+                    const parts: (vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart)[] = [];
+
+                    if (msg.content) {
+                        parts.push(new vscode.LanguageModelTextPart(msg.content));
+                    }
+
+                    for (const toolCall of msg.tool_calls) {
+                        let input: Record<string, unknown> = {};
+                        try {
+                            input = JSON.parse(toolCall.function.arguments);
+                        } catch {
+                            log(`Warning: Could not parse tool call arguments for ${toolCall.function.name}`);
+                        }
+                        parts.push(new vscode.LanguageModelToolCallPart(
+                            toolCall.id,
+                            toolCall.function.name,
+                            input
+                        ));
+                    }
+
+                    return vscode.LanguageModelChatMessage.Assistant(parts);
+                }
+                return vscode.LanguageModelChatMessage.Assistant(msg.content || '');
+
+            case 'tool':
+                // Tool result messages - VS Code expects these as user messages with ToolResultPart
+                if (msg.tool_call_id) {
+                    return vscode.LanguageModelChatMessage.User([
+                        new vscode.LanguageModelToolResultPart(
+                            msg.tool_call_id,
+                            [new vscode.LanguageModelTextPart(msg.content || '')]
+                        )
+                    ]);
+                }
+                // Fallback if no tool_call_id (shouldn't happen if validation works)
+                return vscode.LanguageModelChatMessage.User(msg.content || '');
+
             case 'user':
             default:
-                return vscode.LanguageModelChatMessage.User(msg.content);
+                return vscode.LanguageModelChatMessage.User(msg.content || '');
         }
     });
 }
@@ -222,7 +538,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
 
             // Calculate context size
             const messageCount = request.messages.length;
-            const totalChars = request.messages.reduce((sum, m) => sum + m.content.length, 0);
+            const totalChars = request.messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
             const estimatedTokens = Math.ceil(totalChars / 4); // rough estimate: ~4 chars per token
 
             const requestedModel = request.model || '(default)';
@@ -233,7 +549,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                 return;
             }
 
-            log(`Request: ${messageCount} msgs, ~${estimatedTokens} tokens, stream: ${request.stream ?? false}`);
+            // Prepare tools (merge with VS Code tools if use_vscode_tools is enabled)
+            const allTools = await mergeWithVSCodeTools(request.tools, request.use_vscode_tools ?? false);
+            const hasTools = allTools.length > 0;
+
+            log(`Request: ${messageCount} msgs, ~${estimatedTokens} tokens, stream: ${request.stream ?? false}${hasTools ? `, ${allTools.length} tools` : ''}`);
             log(`Model: ${requestedModel} → ${model.name} (${model.id})`);
 
             const vsCodeMessages = convertToVSCodeMessages(request.messages);
@@ -243,7 +563,106 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
             const cancellationSource = new vscode.CancellationTokenSource();
             const timeoutId = setTimeout(() => cancellationSource.cancel(), timeoutMs);
 
+            // Build request options with tools if provided
             const options: vscode.LanguageModelChatRequestOptions = {};
+            if (hasTools) {
+                options.tools = convertToVSCodeTools(allTools);
+                // Map tool_choice to VS Code toolMode
+                if (request.tool_choice === 'required') {
+                    options.toolMode = vscode.LanguageModelChatToolMode.Required;
+                }
+                // 'none' - don't pass tools at all (handled above by not setting options.tools)
+                // 'auto' - default behavior
+                // specific function - filter to single tool (not supported by VS Code API directly)
+            }
+
+            // Handle auto-execute mode (server-side tool execution)
+            if (request.tool_execution === 'auto' && hasTools) {
+                log('Auto-execute mode enabled');
+                try {
+                    const maxRounds = request.max_tool_rounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+                    const result = await runAutoExecuteLoop(
+                        model,
+                        vsCodeMessages,
+                        options,
+                        maxRounds,
+                        cancellationSource.token
+                    );
+
+                    const responseTokens = Math.ceil(result.content.length / 4);
+                    log(`Auto-execute response: ~${result.content.length} chars (~${responseTokens} tokens), ${result.toolCallsExecuted} tool call(s) executed`);
+
+                    // Raw logging of response
+                    logRaw('RESPONSE (auto-execute)', result.content);
+
+                    // Return final response (no tool_calls - they were executed)
+                    const openAIResponse: OpenAIResponse = {
+                        id: generateId(),
+                        object: 'chat.completion',
+                        created: Math.floor(Date.now() / 1000),
+                        model: model.id,
+                        choices: [{
+                            index: 0,
+                            message: {
+                                role: 'assistant',
+                                content: result.content
+                            },
+                            finish_reason: 'stop'
+                        }],
+                        usage: {
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
+                            total_tokens: 0
+                        }
+                    };
+
+                    res.writeHead(200, {
+                        'Content-Type': 'application/json',
+                        'Connection': 'close',
+                        ...getCorsHeaders(req.headers.origin)
+                    });
+                    res.end(JSON.stringify(openAIResponse));
+
+                    // Log to UI
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: result.content.length,
+                        stream: false,
+                        durationMs: Date.now() - startTime,
+                        status: 'success'
+                    });
+                } catch (error) {
+                    const durationMs = Date.now() - startTime;
+                    logError(`Auto-execute failed after ${durationMs}ms`, error);
+                    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                    sendErrorResponse(res, 500, errorMessage, 'server_error');
+
+                    addRequestLog({
+                        id: requestId,
+                        timestamp: new Date().toISOString(),
+                        method: 'POST',
+                        endpoint: '/v1/chat/completions',
+                        model: model.id,
+                        messageCount,
+                        inputChars: totalChars,
+                        outputChars: 0,
+                        stream: false,
+                        durationMs: Date.now() - startTime,
+                        status: 'error',
+                        errorMessage
+                    });
+                } finally {
+                    clearTimeout(timeoutId);
+                    cancellationSource.dispose();
+                }
+                return;
+            }
 
             if (request.stream) {
                 // Streaming response
@@ -274,27 +693,94 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     };
                     res.write(`data: ${JSON.stringify(initialChunk)}\n\n`);
 
-                    // Stream content chunks
+                    // Stream content and tool call chunks
                     let responseChars = 0;
                     let fullResponse = '';
-                    for await (const chunk of response.text) {
-                        responseChars += chunk.length;
-                        fullResponse += chunk;
-                        const streamChunk: StreamChunk = {
-                            id,
-                            object: 'chat.completion.chunk',
-                            created,
-                            model: model.id,
-                            choices: [{
-                                index: 0,
-                                delta: { content: chunk },
-                                finish_reason: null
-                            }]
-                        };
-                        res.write(`data: ${JSON.stringify(streamChunk)}\n\n`);
+                    const toolCalls: ToolCall[] = [];
+                    const toolCallArgumentsBuffer: Map<number, string> = new Map();
+                    let toolCallIndex = 0;
+
+                    // Use response.stream if available (for tool calling), otherwise fall back to response.text
+                    const stream = response.stream || (async function* () {
+                        for await (const text of response.text) {
+                            yield new vscode.LanguageModelTextPart(text);
+                        }
+                    })();
+
+                    for await (const part of stream) {
+                        if (part instanceof vscode.LanguageModelTextPart) {
+                            // Regular text content
+                            const text = part.value;
+                            responseChars += text.length;
+                            fullResponse += text;
+                            const streamChunk: StreamChunk = {
+                                id,
+                                object: 'chat.completion.chunk',
+                                created,
+                                model: model.id,
+                                choices: [{
+                                    index: 0,
+                                    delta: { content: text },
+                                    finish_reason: null
+                                }]
+                            };
+                            res.write(`data: ${JSON.stringify(streamChunk)}\n\n`);
+                        } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                            // Tool call from model
+                            const toolCall = convertToolCallPart(part);
+                            toolCalls.push(toolCall);
+
+                            // Send tool call delta chunks
+                            // First chunk: id, type, function.name
+                            const firstDelta: ToolCallDelta = {
+                                index: toolCallIndex,
+                                id: toolCall.id,
+                                type: 'function',
+                                function: {
+                                    name: toolCall.function.name,
+                                    arguments: ''
+                                }
+                            };
+                            const firstChunk: StreamChunk = {
+                                id,
+                                object: 'chat.completion.chunk',
+                                created,
+                                model: model.id,
+                                choices: [{
+                                    index: 0,
+                                    delta: { tool_calls: [firstDelta] },
+                                    finish_reason: null
+                                }]
+                            };
+                            res.write(`data: ${JSON.stringify(firstChunk)}\n\n`);
+
+                            // Second chunk: arguments (could be streamed incrementally, but VS Code gives us all at once)
+                            const argsDelta: ToolCallDelta = {
+                                index: toolCallIndex,
+                                function: {
+                                    arguments: toolCall.function.arguments
+                                }
+                            };
+                            const argsChunk: StreamChunk = {
+                                id,
+                                object: 'chat.completion.chunk',
+                                created,
+                                model: model.id,
+                                choices: [{
+                                    index: 0,
+                                    delta: { tool_calls: [argsDelta] },
+                                    finish_reason: null
+                                }]
+                            };
+                            res.write(`data: ${JSON.stringify(argsChunk)}\n\n`);
+
+                            toolCallIndex++;
+                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`);
+                        }
                     }
 
-                    // Send final chunk
+                    // Send final chunk with appropriate finish_reason
+                    const finishReason = toolCalls.length > 0 ? 'tool_calls' : 'stop';
                     const finalChunk: StreamChunk = {
                         id,
                         object: 'chat.completion.chunk',
@@ -303,7 +789,7 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                         choices: [{
                             index: 0,
                             delta: {},
-                            finish_reason: 'stop'
+                            finish_reason: finishReason
                         }]
                     };
                     res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
@@ -311,10 +797,11 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     res.end();
 
                     const responseTokens = Math.ceil(responseChars / 4);
-                    log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)`);
+                    const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
+                    log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)${toolInfo}`);
 
                     // Raw logging of response
-                    logRaw('RESPONSE (stream)', fullResponse);
+                    logRaw('RESPONSE (stream)', fullResponse + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
 
                     // Log to UI
                     addRequestLog({
@@ -365,16 +852,33 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                     const response = await model.sendRequest(vsCodeMessages, options, cancellationSource.token);
 
                     let content = '';
-                    for await (const chunk of response.text) {
-                        content += chunk;
+                    const toolCalls: ToolCall[] = [];
+
+                    // Use response.stream if available (for tool calling), otherwise fall back to response.text
+                    const stream = response.stream || (async function* () {
+                        for await (const text of response.text) {
+                            yield new vscode.LanguageModelTextPart(text);
+                        }
+                    })();
+
+                    for await (const part of stream) {
+                        if (part instanceof vscode.LanguageModelTextPart) {
+                            content += part.value;
+                        } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                            const toolCall = convertToolCallPart(part);
+                            toolCalls.push(toolCall);
+                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`);
+                        }
                     }
 
                     const responseTokens = Math.ceil(content.length / 4);
-                    log(`Response: ~${content.length} chars (~${responseTokens} tokens)`);
+                    const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
+                    log(`Response: ~${content.length} chars (~${responseTokens} tokens)${toolInfo}`);
 
                     // Raw logging of response
-                    logRaw('RESPONSE', content);
+                    logRaw('RESPONSE', content + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
 
+                    // Build response with or without tool calls
                     const openAIResponse: OpenAIResponse = {
                         id: generateId(),
                         object: 'chat.completion',
@@ -384,9 +888,10 @@ async function handleChatCompletion(req: http.IncomingMessage, res: http.ServerR
                             index: 0,
                             message: {
                                 role: 'assistant',
-                                content
+                                content: toolCalls.length > 0 && !content ? null : content,
+                                tool_calls: toolCalls.length > 0 ? toolCalls : undefined
                             },
-                            finish_reason: 'stop'
+                            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop'
                         }],
                         usage: {
                             prompt_tokens: 0,  // VS Code API doesn't expose token counts
@@ -522,11 +1027,16 @@ function createServer(_port: number): http.Server {
 
         log(`${req.method} ${url}`);
 
-        if (req.method === 'POST' && (url === '/v1/chat/completions' || url === '/chat/completions')) {
+        // Parse URL to extract path without query params for routing
+        const urlPath = url.split('?')[0];
+
+        if (req.method === 'POST' && (urlPath === '/v1/chat/completions' || urlPath === '/chat/completions')) {
             await handleChatCompletion(req, res);
-        } else if (req.method === 'GET' && (url === '/v1/models' || url === '/models')) {
+        } else if (req.method === 'GET' && (urlPath === '/v1/models' || urlPath === '/models')) {
             await handleModels(res, corsHeaders);
-        } else if (req.method === 'GET' && (url === '/health' || url === '/')) {
+        } else if (req.method === 'GET' && (urlPath === '/v1/tools' || urlPath === '/tools')) {
+            await handleTools(req, res, corsHeaders);
+        } else if (req.method === 'GET' && (urlPath === '/health' || urlPath === '/')) {
             handleHealth(res, corsHeaders);
         } else {
             sendErrorResponse(res, 404, `Unknown endpoint: ${req.method} ${url}`, 'not_found');

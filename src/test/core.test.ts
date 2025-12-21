@@ -20,8 +20,18 @@ import {
     REQUEST_TIMEOUT_MS,
     KEEP_ALIVE_TIMEOUT_MS,
     MODEL_CACHE_TTL_MS,
+    DEFAULT_MAX_TOOL_ROUNDS,
     ChatMessage,
-    ChatCompletionRequest
+    ChatCompletionRequest,
+    Tool,
+    ToolCall,
+    ToolInfo,
+    generateToolCallId,
+    validateTools,
+    createOpenAIResponseWithTools,
+    createStreamChunkWithTools,
+    filterToolsByTags,
+    filterToolsByName
 } from '../core';
 
 describe('Core Utilities', () => {
@@ -503,8 +513,8 @@ describe('Core Utilities', () => {
     });
 
     describe('REQUEST_TIMEOUT_MS', () => {
-        it('should be 30 seconds', () => {
-            expect(REQUEST_TIMEOUT_MS).to.equal(30000);
+        it('should be 120 seconds (2 minutes)', () => {
+            expect(REQUEST_TIMEOUT_MS).to.equal(120000);
         });
 
         it('should be a positive number', () => {
@@ -513,8 +523,8 @@ describe('Core Utilities', () => {
     });
 
     describe('KEEP_ALIVE_TIMEOUT_MS', () => {
-        it('should be 5 seconds', () => {
-            expect(KEEP_ALIVE_TIMEOUT_MS).to.equal(5000);
+        it('should be 65 seconds', () => {
+            expect(KEEP_ALIVE_TIMEOUT_MS).to.equal(65000);
         });
 
         it('should be a positive number', () => {
@@ -529,6 +539,333 @@ describe('Core Utilities', () => {
 
         it('should be a positive number', () => {
             expect(MODEL_CACHE_TTL_MS).to.be.greaterThan(0);
+        });
+    });
+
+    // ============================================================================
+    // Tool Calling Tests
+    // ============================================================================
+
+    describe('DEFAULT_MAX_TOOL_ROUNDS', () => {
+        it('should be 10', () => {
+            expect(DEFAULT_MAX_TOOL_ROUNDS).to.equal(10);
+        });
+    });
+
+    describe('generateToolCallId', () => {
+        it('should start with call_', () => {
+            const id = generateToolCallId();
+            expect(id).to.match(/^call_/);
+        });
+
+        it('should generate unique IDs', () => {
+            const ids = new Set<string>();
+            for (let i = 0; i < 100; i++) {
+                ids.add(generateToolCallId());
+            }
+            expect(ids.size).to.equal(100);
+        });
+
+        it('should have reasonable length', () => {
+            const id = generateToolCallId();
+            expect(id.length).to.be.greaterThan(10);
+            expect(id.length).to.be.lessThan(40);
+        });
+    });
+
+    describe('validateTools', () => {
+        it('should pass valid tools array', () => {
+            const tools: Tool[] = [{
+                type: 'function',
+                function: {
+                    name: 'get_weather',
+                    description: 'Get weather info',
+                    parameters: { type: 'object', properties: {} }
+                }
+            }];
+            expect(validateTools(tools)).to.be.null;
+        });
+
+        it('should fail if tools is not an array', () => {
+            expect(validateTools('not an array')).to.include('must be an array');
+            expect(validateTools({})).to.include('must be an array');
+        });
+
+        it('should fail if tool is not an object', () => {
+            expect(validateTools(['string'])).to.include('must be an object');
+            expect(validateTools([null])).to.include('must be an object');
+        });
+
+        it('should fail if type is not function', () => {
+            const tools = [{ type: 'invalid', function: { name: 'test' } }];
+            expect(validateTools(tools)).to.include("must be 'function'");
+        });
+
+        it('should fail if function is missing', () => {
+            const tools = [{ type: 'function' }];
+            expect(validateTools(tools)).to.include('must be an object');
+        });
+
+        it('should fail if function.name is missing', () => {
+            const tools = [{ type: 'function', function: {} }];
+            expect(validateTools(tools)).to.include('must be a non-empty string');
+        });
+
+        it('should fail if function.name is empty', () => {
+            const tools = [{ type: 'function', function: { name: '' } }];
+            expect(validateTools(tools)).to.include('must be a non-empty string');
+        });
+
+        it('should pass with optional parameters', () => {
+            const tools: Tool[] = [{
+                type: 'function',
+                function: { name: 'simple_tool' }
+            }];
+            expect(validateTools(tools)).to.be.null;
+        });
+
+        it('should fail if parameters is not an object', () => {
+            const tools = [{
+                type: 'function',
+                function: { name: 'test', parameters: 'invalid' }
+            }];
+            expect(validateTools(tools)).to.include('must be an object');
+        });
+
+        it('should validate multiple tools', () => {
+            const tools: Tool[] = [
+                { type: 'function', function: { name: 'tool1' } },
+                { type: 'function', function: { name: 'tool2' } }
+            ];
+            expect(validateTools(tools)).to.be.null;
+        });
+
+        it('should report index of invalid tool', () => {
+            const tools = [
+                { type: 'function', function: { name: 'valid' } },
+                { type: 'invalid', function: { name: 'test' } }
+            ];
+            expect(validateTools(tools)).to.include('tools[1]');
+        });
+    });
+
+    describe('validateRequest with tools', () => {
+        it('should pass request with valid tools', () => {
+            const request: ChatCompletionRequest = {
+                messages: [{ role: 'user', content: 'Hello' }],
+                tools: [{
+                    type: 'function',
+                    function: { name: 'get_weather' }
+                }]
+            };
+            expect(validateRequest(request)).to.be.null;
+        });
+
+        it('should fail request with invalid tools', () => {
+            const request = {
+                messages: [{ role: 'user', content: 'Hello' }],
+                tools: [{ type: 'invalid' }]
+            } as unknown as ChatCompletionRequest;
+            expect(validateRequest(request)).to.include("must be 'function'");
+        });
+
+        it('should pass request with tool role message', () => {
+            const request: ChatCompletionRequest = {
+                messages: [
+                    { role: 'user', content: 'Hello' },
+                    { role: 'assistant', content: null, tool_calls: [{ id: 'call_123', type: 'function', function: { name: 'test', arguments: '{}' } }] },
+                    { role: 'tool', content: 'result', tool_call_id: 'call_123' }
+                ]
+            };
+            expect(validateRequest(request)).to.be.null;
+        });
+
+        it('should fail tool message without tool_call_id', () => {
+            const request = {
+                messages: [
+                    { role: 'tool', content: 'result' }
+                ]
+            } as unknown as ChatCompletionRequest;
+            expect(validateRequest(request)).to.include('tool_call_id');
+        });
+
+        it('should pass assistant message with tool_calls', () => {
+            const request: ChatCompletionRequest = {
+                messages: [{
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{
+                        id: 'call_abc',
+                        type: 'function',
+                        function: { name: 'test', arguments: '{}' }
+                    }]
+                }]
+            };
+            expect(validateRequest(request)).to.be.null;
+        });
+
+        it('should fail if tool_calls is not an array', () => {
+            const request = {
+                messages: [{
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: 'not an array'
+                }]
+            } as unknown as ChatCompletionRequest;
+            expect(validateRequest(request)).to.include('must be an array');
+        });
+
+        it('should fail if tool_call id is missing', () => {
+            const request = {
+                messages: [{
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{ type: 'function', function: { name: 'test', arguments: '{}' } }]
+                }]
+            } as unknown as ChatCompletionRequest;
+            expect(validateRequest(request)).to.include('id must be a string');
+        });
+    });
+
+    describe('createOpenAIResponseWithTools', () => {
+        it('should create response with tool calls', () => {
+            const toolCalls: ToolCall[] = [{
+                id: 'call_123',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{"city":"NYC"}' }
+            }];
+            const response = createOpenAIResponseWithTools('id', 'model', null, toolCalls);
+
+            expect(response.choices[0].message.tool_calls).to.have.length(1);
+            expect(response.choices[0].message.tool_calls![0].id).to.equal('call_123');
+            expect(response.choices[0].finish_reason).to.equal('tool_calls');
+        });
+
+        it('should create response with content and tool calls', () => {
+            const toolCalls: ToolCall[] = [{
+                id: 'call_123',
+                type: 'function',
+                function: { name: 'test', arguments: '{}' }
+            }];
+            const response = createOpenAIResponseWithTools('id', 'model', 'Thinking...', toolCalls);
+
+            expect(response.choices[0].message.content).to.equal('Thinking...');
+            expect(response.choices[0].message.tool_calls).to.have.length(1);
+        });
+
+        it('should create response without tool calls when empty', () => {
+            const response = createOpenAIResponseWithTools('id', 'model', 'Hello', []);
+
+            expect(response.choices[0].message.tool_calls).to.be.undefined;
+            expect(response.choices[0].finish_reason).to.equal('stop');
+        });
+
+        it('should use provided timestamp', () => {
+            const response = createOpenAIResponseWithTools('id', 'model', null, [], 12345);
+            expect(response.created).to.equal(12345);
+        });
+    });
+
+    describe('createStreamChunkWithTools', () => {
+        it('should create chunk with tool call deltas', () => {
+            const deltas = [{
+                index: 0,
+                id: 'call_123',
+                type: 'function' as const,
+                function: { name: 'get_weather', arguments: '' }
+            }];
+            const chunk = createStreamChunkWithTools('id', 'model', deltas);
+
+            expect(chunk.choices[0].delta.tool_calls).to.have.length(1);
+            expect(chunk.choices[0].delta.tool_calls![0].id).to.equal('call_123');
+        });
+
+        it('should create final chunk with tool_calls finish reason', () => {
+            const chunk = createStreamChunkWithTools('id', 'model', [], 'tool_calls');
+            expect(chunk.choices[0].finish_reason).to.equal('tool_calls');
+        });
+
+        it('should omit tool_calls when empty', () => {
+            const chunk = createStreamChunkWithTools('id', 'model', []);
+            expect(chunk.choices[0].delta.tool_calls).to.be.undefined;
+        });
+    });
+
+    describe('filterToolsByTags', () => {
+        const tools: ToolInfo[] = [
+            { name: 'tool1', description: 'desc1', tags: ['web', 'search'] },
+            { name: 'tool2', description: 'desc2', tags: ['file', 'read'] },
+            { name: 'tool3', description: 'desc3', tags: ['web', 'file'] },
+            { name: 'tool4', description: 'desc4' } // no tags
+        ];
+
+        it('should return all tools for empty tags', () => {
+            const result = filterToolsByTags(tools, []);
+            expect(result).to.have.length(4);
+        });
+
+        it('should filter by single tag', () => {
+            const result = filterToolsByTags(tools, ['web']);
+            expect(result).to.have.length(2);
+            expect(result.map(t => t.name)).to.include('tool1');
+            expect(result.map(t => t.name)).to.include('tool3');
+        });
+
+        it('should filter by multiple tags (AND logic)', () => {
+            const result = filterToolsByTags(tools, ['web', 'search']);
+            expect(result).to.have.length(1);
+            expect(result[0].name).to.equal('tool1');
+        });
+
+        it('should return empty array for no matches', () => {
+            const result = filterToolsByTags(tools, ['nonexistent']);
+            expect(result).to.have.length(0);
+        });
+    });
+
+    describe('filterToolsByName', () => {
+        const tools: ToolInfo[] = [
+            { name: 'get_weather', description: 'Get weather' },
+            { name: 'get_time', description: 'Get time' },
+            { name: 'set_reminder', description: 'Set reminder' },
+            { name: 'weather_forecast', description: 'Forecast' }
+        ];
+
+        it('should return all tools for empty pattern', () => {
+            const result = filterToolsByName(tools, '');
+            expect(result).to.have.length(4);
+        });
+
+        it('should filter by exact name', () => {
+            const result = filterToolsByName(tools, 'get_weather');
+            expect(result).to.have.length(1);
+            expect(result[0].name).to.equal('get_weather');
+        });
+
+        it('should filter by wildcard prefix', () => {
+            const result = filterToolsByName(tools, 'get_*');
+            expect(result).to.have.length(2);
+        });
+
+        it('should filter by wildcard suffix', () => {
+            const result = filterToolsByName(tools, '*_weather');
+            expect(result).to.have.length(1);
+            expect(result[0].name).to.equal('get_weather');
+        });
+
+        it('should filter by wildcard in middle', () => {
+            const result = filterToolsByName(tools, '*weather*');
+            expect(result).to.have.length(2);
+        });
+
+        it('should be case insensitive', () => {
+            const result = filterToolsByName(tools, 'GET_WEATHER');
+            expect(result).to.have.length(1);
+        });
+
+        it('should return empty for no matches', () => {
+            const result = filterToolsByName(tools, 'nonexistent');
+            expect(result).to.have.length(0);
         });
     });
 });
