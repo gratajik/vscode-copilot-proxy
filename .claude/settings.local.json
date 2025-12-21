@@ -37,7 +37,14 @@
       "Bash(findstr:*)",
       "WebSearch",
       "WebFetch(domain:code.visualstudio.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(py examples/vscode_llm_list_tools.py)",
+      "Bash(npx tsc:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(py examples/vscode_llm_example_simple.py)",
+      "Bash(python:*)",
+      "Bash(py -c:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

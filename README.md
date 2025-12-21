@@ -24,6 +24,8 @@ Perfect for developers who want to use Copilot's models in custom workflows, aut
 
 - **OpenAI-compatible API**: Exposes endpoints that work with any OpenAI-compatible client
 - **All Copilot Models**: Access any model available through your GitHub Copilot subscription
+- **Tool/Function Calling**: Full support for OpenAI-compatible tool calling with pass-through or auto-execute modes
+- **VS Code Tools Integration**: Use VS Code's registered tools (from extensions and MCP servers) in your requests
 - **Streaming Support**: Full support for streaming responses (SSE)
 - **Auto-start**: Optionally starts automatically when VS Code opens
 - **Status Bar Integration**: Shows server status, port, and model count at a glance
@@ -317,6 +319,131 @@ curl http://127.0.0.1:8080/health
   "status": "ok",
   "models_available": 5
 }
+```
+
+### GET `/v1/tools`
+
+List available tools from VS Code (built-in, extensions, and MCP servers).
+
+```bash
+# List all tools
+curl http://127.0.0.1:8080/v1/tools
+
+# Filter by tags
+curl "http://127.0.0.1:8080/v1/tools?tags=vscode,editor"
+
+# Filter by name pattern
+curl "http://127.0.0.1:8080/v1/tools?name=get_*"
+```
+
+**Response:**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "name": "get_open_editors",
+      "description": "Get list of currently open editors",
+      "inputSchema": { "type": "object", "properties": {} },
+      "tags": ["vscode", "editor"]
+    }
+  ]
+}
+```
+
+## Tool Calling
+
+The proxy supports OpenAI-compatible tool/function calling, allowing models to invoke tools and receive results.
+
+### Pass-Through Mode (Default)
+
+In pass-through mode, the proxy returns tool calls to your application. You execute the tools and send results back.
+
+```bash
+# Step 1: Send request with tools
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "What is the weather in London?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string", "description": "City name"}
+          },
+          "required": ["location"]
+        }
+      }
+    }]
+  }'
+
+# Response includes tool_calls - execute the tool, then send results back
+```
+
+See `examples/vscode_llm_tools_simple.py` for a complete pass-through example.
+
+### Auto-Execute Mode
+
+In auto-execute mode, the proxy handles tool execution using VS Code's registered tools. You just send a request and get the final answer.
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "List files in the src folder"}],
+    "use_vscode_tools": true,
+    "tool_execution": "auto",
+    "max_tool_rounds": 5
+  }'
+```
+
+**Tool Calling Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools` | array | - | Array of tool definitions (OpenAI format) |
+| `tool_choice` | string | `"auto"` | `"none"`, `"auto"`, or `"required"` |
+| `use_vscode_tools` | boolean | `false` | Include all VS Code registered tools |
+| `tool_execution` | string | `"none"` | `"none"` (pass-through) or `"auto"` (proxy executes) |
+| `max_tool_rounds` | number | `10` | Max tool execution iterations in auto mode |
+
+See `examples/vscode_llm_tools_auto.py` for a complete auto-execute example.
+
+### Tool Calling Examples
+
+Three tool calling examples are included in the `examples/` folder:
+
+#### List Tools (`vscode_llm_list_tools.py`)
+
+Discover what tools are available in VS Code:
+
+```bash
+py examples/vscode_llm_list_tools.py
+py examples/vscode_llm_list_tools.py --tags vscode
+py examples/vscode_llm_list_tools.py --schema  # Show parameter schemas
+```
+
+#### Pass-Through Mode (`vscode_llm_tools_simple.py`)
+
+Handle tool calls yourself - useful when you need control over tool execution:
+
+```bash
+py examples/vscode_llm_tools_simple.py
+```
+
+#### Auto-Execute Mode (`vscode_llm_tools_auto.py`)
+
+Let the proxy handle everything - just ask and get answers:
+
+```bash
+py examples/vscode_llm_tools_auto.py
 ```
 
 ## Configuration

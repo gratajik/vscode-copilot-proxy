@@ -263,10 +263,12 @@
 ## PHASE 8: DOCUMENTATION & EXAMPLES - COMPLETE
 
 **Status:** Complete
-**Progress:** 6/6 tasks complete (100%)
+**Progress:** 10/10 tasks complete (100%)
 **Phase Started:** 2025-12-20
 **Last Updated:** 2025-12-20
 **Phase Completed:** 2025-12-20
+
+### 8.1 Documentation
 
 - [x] **8.1.1** Add tool calling section to design.md
 - [x] **8.1.2** Document auto-execute mode
@@ -274,6 +276,41 @@
 - [x] **8.1.4** Update API_REFERENCE.md
 - [x] **8.1.5** Update FEATURE_INVENTORY.md
 - [x] **8.1.6** Document API extensions
+
+### 8.2 Example Scripts (examples/)
+
+- [x] **8.2.1** Create examples/vscode_llm_tools_simple.py
+  - **Completed:** 2025-12-20
+  - Basic tool calling with pass-through mode
+  - Define simple tool (get_weather)
+  - Handle tool_calls response
+  - Send tool result and get final answer
+
+- [x] **8.2.2** Create examples/vscode_llm_tools_auto.py
+  - **Completed:** 2025-12-20
+  - Auto-execute mode example
+  - use_vscode_tools: true with tool_execution: 'auto'
+  - Show agentic workflow
+  - Demonstrate max_tool_rounds usage
+
+- [x] **8.2.3** Create examples/vscode_llm_list_tools.py
+  - **Completed:** 2025-12-20
+  - List available VS Code tools
+  - Filter by tags and name (--tags, --name flags)
+  - Display tool schemas (--schema flag)
+  - JSON output option (--json flag)
+
+### 8.3 README Updates
+
+- [x] **8.3.1** Update README.md with tool calling documentation
+  - **Completed:** 2025-12-20
+  - Added Tool Calling section
+  - Documented GET /v1/tools endpoint
+  - Documented tools array in chat completions
+  - Documented use_vscode_tools and tool_execution options
+  - Added curl examples for tool calling
+  - Referenced example scripts
+  - Updated Features list
 
 ---
 
@@ -288,8 +325,8 @@
 | Phase 5: Unit Testing | 8 | 8/8 Complete |
 | Phase 6: Integration Testing | 7 | 7/7 Complete |
 | Phase 7: End-to-End Testing | 8 | 8/8 Complete |
-| Phase 8: Documentation & Examples | 6 | 6/6 Complete |
-| **Total** | **51** | **100% Complete** |
+| Phase 8: Documentation & Examples | 10 | 10/10 Complete |
+| **Total** | **55** | **100% Complete** |
 
 ---
 

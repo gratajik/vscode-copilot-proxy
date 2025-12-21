@@ -311,7 +311,7 @@ async function runAutoExecuteLoop(
     maxRounds: number,
     cancellationToken: vscode.CancellationToken
 ): Promise<{ content: string; toolCallsExecuted: number }> {
-    let messages = [...initialMessages];
+    const messages = [...initialMessages];
     let totalToolCalls = 0;
     let round = 0;
 
