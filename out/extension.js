@@ -1760,6 +1760,15 @@ function activate(context) {
     outputChannel.info('  🚀 Copilot Proxy Starting');
     outputChannel.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     log(`Version: ${context.extension.packageJSON.version || 'unknown'}`, 'info');
+    // Log key settings
+    const startupConfig = vscode.workspace.getConfiguration('copilotProxy');
+    log(`Port: ${startupConfig.get('port', 8080)}`, 'info');
+    log(`Request timeout: ${core_1.REQUEST_TIMEOUT_MS / 1000}s`, 'info');
+    log(`Keep-alive timeout: ${core_1.KEEP_ALIVE_TIMEOUT_MS / 1000}s`, 'info');
+    const defaultModel = startupConfig.get('defaultModel', '');
+    if (defaultModel) {
+        log(`Default model: ${defaultModel}`, 'info');
+    }
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'copilot-proxy.status';

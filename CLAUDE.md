@@ -2,6 +2,13 @@
 
 Guidance for Claude Code when working with this VS Code extension.
 
+When I say release it:
+1. Tick version
+2. Commit and push
+3. Create a push a new release to github
+4. Create and push the version version to extension marketplace.
+5. Tell me how aweseom you did, padawn!
+
 ## Critical: Windows Paths
 
 Use Windows backslash paths for `Edit`, `Glob`, `Grep`, `Read` tools:
