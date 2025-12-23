@@ -513,8 +513,8 @@ describe('Core Utilities', () => {
     });
 
     describe('REQUEST_TIMEOUT_MS', () => {
-        it('should be 120 seconds (2 minutes)', () => {
-            expect(REQUEST_TIMEOUT_MS).to.equal(120000);
+        it('should be 300 seconds (5 minutes)', () => {
+            expect(REQUEST_TIMEOUT_MS).to.equal(300000);
         });
 
         it('should be a positive number', () => {

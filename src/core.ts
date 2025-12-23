@@ -15,11 +15,11 @@
 export const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024;
 
 /**
- * Request timeout in milliseconds (2 minutes).
- * Prevents connection exhaustion from slow requests.
- * Set higher for LLM responses which can take time.
+ * Request timeout in milliseconds (5 minutes).
+ * Must be long enough for large LLM requests (60K+ tokens).
+ * Matches the model cancellation timeout in extension.ts.
  */
-export const REQUEST_TIMEOUT_MS = 120000;
+export const REQUEST_TIMEOUT_MS = 300000;
 
 /**
  * Server keep-alive timeout in milliseconds (65 seconds).
