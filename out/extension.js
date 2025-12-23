@@ -52,6 +52,22 @@ let server = null;
 let statusBarItem;
 let outputChannel;
 let statusPanel;
+// Visual symbols for log messages
+const LOG_SYMBOLS = {
+    startup: '🚀',
+    success: '✅',
+    warning: '⚠️',
+    error: '❌',
+    request: '📨',
+    response: '📤',
+    tool: '🔧',
+    model: '🤖',
+    stream: '🔄',
+    info: '💡',
+    server: '🌐',
+    connect: '🔌',
+    disconnect: '🔗',
+};
 // Request logs storage (max 50 entries)
 const MAX_REQUEST_LOGS = 50;
 let requestLogs = [];
@@ -66,31 +82,32 @@ function addRequestLog(entry) {
         updateStatusPanel();
     }
 }
-function log(message) {
-    const timestamp = new Date().toLocaleTimeString();
-    const formatted = `[${timestamp}] ${message}`;
+function log(message, symbol) {
+    const prefix = symbol ? `${LOG_SYMBOLS[symbol]} ` : '';
     console.log(`[Copilot Proxy] ${message}`);
-    outputChannel?.appendLine(formatted);
+    outputChannel?.info(`${prefix}${message}`);
+}
+function logWarn(message, symbol) {
+    const prefix = symbol ? `${LOG_SYMBOLS[symbol]} ` : `${LOG_SYMBOLS.warning} `;
+    console.warn(`[Copilot Proxy] ${message}`);
+    outputChannel?.warn(`${prefix}${message}`);
 }
 function logError(message, error) {
-    const timestamp = new Date().toLocaleTimeString();
     const errorDetails = error instanceof Error ? error.message : String(error ?? '');
-    const formatted = errorDetails
-        ? `[${timestamp}] ERROR: ${message} - ${errorDetails}`
-        : `[${timestamp}] ERROR: ${message}`;
+    const fullMessage = errorDetails ? `${message} - ${errorDetails}` : message;
     console.error(`[Copilot Proxy] ERROR: ${message}`, error);
-    outputChannel?.appendLine(formatted);
+    outputChannel?.error(`${LOG_SYMBOLS.error} ${fullMessage}`);
 }
 function logRaw(label, content) {
     const config = vscode.workspace.getConfiguration('copilotProxy');
     if (!config.get('rawLogging', false))
         return;
-    const timestamp = new Date().toLocaleTimeString();
-    const separator = '─'.repeat(60);
-    outputChannel?.appendLine(`[${timestamp}] ${separator}`);
-    outputChannel?.appendLine(`[${timestamp}] RAW ${label}:`);
-    outputChannel?.appendLine(content);
-    outputChannel?.appendLine(`[${timestamp}] ${separator}`);
+    const separator = '━'.repeat(50);
+    outputChannel?.debug(`┏${separator}┓`);
+    outputChannel?.debug(`┃ 📋 RAW ${label}`);
+    outputChannel?.debug(`┣${separator}┫`);
+    content.split('\n').forEach(line => outputChannel?.debug(`┃ ${line}`));
+    outputChannel?.debug(`┗${separator}┛`);
 }
 /**
  * Sends a standardized HTTP error response.
@@ -220,9 +237,9 @@ async function executeToolCall(toolCall, cancellationToken) {
             input = JSON.parse(toolCall.function.arguments);
         }
         catch {
-            log(`Warning: Could not parse tool arguments for ${toolCall.function.name}`);
+            logWarn(`Could not parse tool arguments for ${toolCall.function.name}`);
         }
-        log(`Executing tool: ${toolCall.function.name}`);
+        log(`Executing tool: ${toolCall.function.name}`, 'tool');
         // Use VS Code's lm.invokeTool API
         const result = await vscode.lm.invokeTool(toolCall.function.name, {
             input,
@@ -267,7 +284,7 @@ async function executeToolCall(toolCall, cancellationToken) {
                 content = JSON.stringify(result);
             }
         }
-        log(`Tool ${toolCall.function.name} completed: ${content.length} chars`);
+        log(`Tool ${toolCall.function.name} completed: ${content.length} chars`, 'tool');
         return { success: true, content };
     }
     catch (error) {
@@ -379,7 +396,7 @@ function convertToVSCodeMessages(messages) {
     // Check for system messages and log warning
     const systemMessageCount = messages.filter(m => m.role === 'system').length;
     if (systemMessageCount > 0) {
-        log(`Warning: ${systemMessageCount} system message(s) converted to user role (VS Code LM API limitation)`);
+        logWarn(`${systemMessageCount} system message(s) converted to user role (VS Code LM API limitation)`);
     }
     return messages.map(msg => {
         switch (msg.role) {
@@ -400,7 +417,7 @@ function convertToVSCodeMessages(messages) {
                             input = JSON.parse(toolCall.function.arguments);
                         }
                         catch {
-                            log(`Warning: Could not parse tool call arguments for ${toolCall.function.name}`);
+                            logWarn(`Could not parse tool call arguments for ${toolCall.function.name}`);
                         }
                         parts.push(new vscode.LanguageModelToolCallPart(toolCall.id, toolCall.function.name, input));
                     }
@@ -482,8 +499,8 @@ async function handleChatCompletion(req, res) {
             // Prepare tools (merge with VS Code tools if use_vscode_tools is enabled)
             const allTools = await mergeWithVSCodeTools(request.tools, request.use_vscode_tools ?? false);
             const hasTools = allTools.length > 0;
-            log(`Request: ${messageCount} msgs, ~${estimatedTokens} tokens, stream: ${request.stream ?? false}${hasTools ? `, ${allTools.length} tools` : ''}`);
-            log(`Model: ${requestedModel} → ${model.name} (${model.id})`);
+            log(`Request: ${messageCount} msgs, ~${estimatedTokens} tokens, stream: ${request.stream ?? false}${hasTools ? `, ${allTools.length} tools` : ''}`, 'request');
+            log(`Model: ${requestedModel} → ${model.name} (${model.id})`, 'model');
             const vsCodeMessages = convertToVSCodeMessages(request.messages);
             // Create cancellation token with timeout (5 min default)
             const timeoutMs = 300000;
@@ -503,7 +520,7 @@ async function handleChatCompletion(req, res) {
             }
             // Handle auto-execute mode (server-side tool execution)
             if (request.tool_execution === 'auto' && hasTools) {
-                log('Auto-execute mode enabled');
+                log('Auto-execute mode enabled', 'tool');
                 try {
                     const maxRounds = request.max_tool_rounds ?? core_1.DEFAULT_MAX_TOOL_ROUNDS;
                     const result = await runAutoExecuteLoop(model, vsCodeMessages, options, maxRounds, cancellationSource.token);
@@ -681,7 +698,7 @@ async function handleChatCompletion(req, res) {
                             };
                             res.write(`data: ${JSON.stringify(argsChunk)}\n\n`);
                             toolCallIndex++;
-                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`);
+                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
                         }
                     }
                     // Send final chunk with appropriate finish_reason
@@ -702,7 +719,7 @@ async function handleChatCompletion(req, res) {
                     res.end();
                     const responseTokens = Math.ceil(responseChars / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
-                    log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)${toolInfo}`);
+                    log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)${toolInfo}`, 'stream');
                     // Raw logging of response
                     logRaw('RESPONSE (stream)', fullResponse + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
                     // Log to UI
@@ -769,12 +786,12 @@ async function handleChatCompletion(req, res) {
                         else if (part instanceof vscode.LanguageModelToolCallPart) {
                             const toolCall = convertToolCallPart(part);
                             toolCalls.push(toolCall);
-                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`);
+                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
                         }
                     }
                     const responseTokens = Math.ceil(content.length / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
-                    log(`Response: ~${content.length} chars (~${responseTokens} tokens)${toolInfo}`);
+                    log(`Response: ~${content.length} chars (~${responseTokens} tokens)${toolInfo}`, 'response');
                     // Raw logging of response
                     logRaw('RESPONSE', content + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
                     // Build response with or without tool calls
@@ -916,7 +933,7 @@ function createServer(_port) {
             return;
         }
         const url = req.url || '';
-        log(`${req.method} ${url}`);
+        log(`${req.method} ${url}`, 'request');
         // Parse URL to extract path without query params for routing
         const urlPath = url.split('?')[0];
         if (req.method === 'POST' && (urlPath === '/v1/chat/completions' || urlPath === '/chat/completions')) {
@@ -937,15 +954,15 @@ function createServer(_port) {
     });
 }
 async function startServer() {
-    log('startServer() called');
+    log('Starting server...', 'server');
     if (server) {
-        log('Server already running, skipping');
+        logWarn('Server already running, skipping');
         vscode.window.showInformationMessage('Copilot Proxy server is already running');
         return;
     }
     const config = vscode.workspace.getConfiguration('copilotProxy');
     const port = config.get('port', 8080);
-    log(`Attempting to start on port ${port}`);
+    log(`Binding to port ${port}...`, 'server');
     server = createServer(port);
     // Configure server-level timeouts
     server.timeout = core_1.REQUEST_TIMEOUT_MS;
@@ -955,21 +972,21 @@ async function startServer() {
     let connectionCount = 0;
     server.on('connection', (socket) => {
         connectionCount++;
-        log(`New connection (${connectionCount} active)`);
+        log(`New connection (${connectionCount} active)`, 'connect');
         socket.on('close', () => {
             connectionCount--;
-            log(`Connection closed (${connectionCount} active)`);
+            log(`Connection closed (${connectionCount} active)`, 'disconnect');
         });
     });
     server.listen(port, '127.0.0.1', async () => {
-        log(`Server started on 127.0.0.1:${port}`);
-        log(`Endpoint: http://127.0.0.1:${port}/v1/chat/completions`);
+        log(`Server running on 127.0.0.1:${port}`, 'success');
+        log(`Endpoint: http://127.0.0.1:${port}/v1/chat/completions`, 'info');
         // Log available models after server starts
         const models = await refreshModels();
-        log(`Loaded ${models.length} model(s):`);
+        log(`Loaded ${models.length} model(s):`, 'model');
         for (const m of models) {
             const ctx = m.maxInputTokens?.toLocaleString() ?? '?';
-            log(`  - ${m.name} (${m.id}): ${ctx} tokens`);
+            log(`  └─ ${m.name} (${m.id}): ${ctx} tokens`);
         }
         vscode.window.showInformationMessage(`Copilot Proxy server started on port ${port}`);
         updateStatusBar(port);
@@ -992,7 +1009,7 @@ async function startServer() {
 function stopServer() {
     if (server) {
         server.close(() => {
-            log('Server stopped');
+            log('Server stopped', 'server');
             vscode.window.showInformationMessage('Copilot Proxy server stopped');
         });
         server = null;
@@ -1735,12 +1752,14 @@ function updateStatusPanel() {
     statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings, logRequestsToUI ? requestLogs : []);
 }
 function activate(context) {
-    // Create output channel first so log() works
-    outputChannel = vscode.window.createOutputChannel('Copilot Proxy');
+    // Create log output channel (supports colored log levels)
+    outputChannel = vscode.window.createOutputChannel('Copilot Proxy', { log: true });
     context.subscriptions.push(outputChannel);
-    outputChannel.show(true); // Show output channel on startup (preserveFocus: true)
-    log('=== Copilot Proxy Starting ===');
-    log(`Extension version: ${context.extension.packageJSON.version || 'unknown'}`);
+    // Startup banner
+    outputChannel.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    outputChannel.info('  🚀 Copilot Proxy Starting');
+    outputChannel.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log(`Version: ${context.extension.packageJSON.version || 'unknown'}`, 'info');
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'copilot-proxy.status';
@@ -1757,12 +1776,11 @@ function activate(context) {
     // Auto-start if configured
     const config = vscode.workspace.getConfiguration('copilotProxy');
     const autoStart = config.get('autoStart', true);
-    log(`Auto-start: ${autoStart}`);
+    log(`Auto-start: ${autoStart}`, 'info');
     if (autoStart) {
-        log('Calling startServer...');
         startServer().catch(err => logError('startServer failed', err));
     }
-    log('Extension activated');
+    log('Extension activated', 'success');
 }
 function deactivate() {
     if (server) {
@@ -1773,6 +1791,6 @@ function deactivate() {
         statusPanel.dispose();
         statusPanel = undefined;
     }
-    log('Extension deactivated');
+    log('Extension deactivated', 'info');
 }
 //# sourceMappingURL=extension.js.map
