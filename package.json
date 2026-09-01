@@ -32,6 +32,10 @@
       {
         "command": "copilot-proxy.status",
         "title": "Copilot Proxy: Show Status"
+      },
+      {
+        "command": "copilot-proxy.setProxyToken",
+        "title": "Copilot Proxy: Set Proxy Token"
       }
     ],
     "configuration": {
@@ -57,10 +61,18 @@
           "default": false,
           "description": "Log all requests and responses to the status panel UI"
         },
-        "copilotProxy.rawLogging": {
+        "copilotProxy.allowedOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Explicit allowlist of trusted local origins (e.g. http://localhost:5173) permitted to make CORS requests to the proxy. Empty by default - no origins are allowed until added here. No wildcard support."
+        },
+        "copilotProxy.allowAutoToolExecution": {
           "type": "boolean",
           "default": false,
-          "description": "Log raw request/response content to the output channel (verbose)"
+          "description": "Allow the server to automatically execute VS Code tools on behalf of a request (tool_execution: 'auto'). Disabled by default - a request cannot enable this on its own; it must be explicitly enabled here."
         }
       }
     }

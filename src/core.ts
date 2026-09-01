@@ -48,45 +48,9 @@ export const HEADERS_TIMEOUT_MS = 60000;
  */
 export const MODEL_CACHE_TTL_MS = 60000;
 
-/**
- * Check if an origin is a localhost origin.
- * Allows http://localhost:* and http://127.0.0.1:*
- */
-export function isLocalhostOrigin(origin: string | undefined): boolean {
-    if (!origin) return true; // No origin = direct API call (curl, etc.)
-    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-}
-
-/**
- * Get CORS headers for a request.
- * Only allows localhost origins to prevent malicious websites from accessing the API.
- */
-export function getCorsHeaders(origin: string | undefined): Record<string, string> {
-    const headers: Record<string, string> = {
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Max-Age': '86400'
-    };
-
-    // Only set Allow-Origin for localhost origins
-    if (isLocalhostOrigin(origin)) {
-        headers['Access-Control-Allow-Origin'] = origin || '*';
-    }
-    // If not localhost origin, don't set Allow-Origin - browser will block
-
-    return headers;
-}
-
-/**
- * CORS headers for HTTP responses (legacy - use getCorsHeaders for origin validation).
- * @deprecated Use getCorsHeaders(req.headers.origin) instead for origin validation.
- */
-export const CORS_HEADERS = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Max-Age': '86400'
-} as const;
+// CORS origin handling has moved to security.ts (normalizeOrigin, isOriginAllowed,
+// buildCorsHeaders) as part of the security hardening sprint. isLocalhostOrigin,
+// getCorsHeaders, and CORS_HEADERS were removed from here.
 
 // ============================================================================
 // Tool/Function Calling Types
@@ -347,7 +311,6 @@ export interface SettingsInfo {
     autoStart: boolean;
     defaultModel: string;
     logRequestsToUI: boolean;
-    rawLogging: boolean;
 }
 
 export interface RequestLogEntry {

@@ -14,7 +14,8 @@ All settings are prefixed with `copilotProxy.` in VS Code settings.
 | `autoStart` | boolean | true | Start on activation |
 | `defaultModel` | string | "" | Default model ID |
 | `logRequestsToUI` | boolean | false | Show requests in UI |
-| `rawLogging` | boolean | false | Verbose output logging |
+| `allowedOrigins` | array | [] | Explicit CORS origin allowlist (no wildcards) |
+| `allowAutoToolExecution` | boolean | false | Gate for proxy-side automatic VS Code tool execution |
 
 ---
 
@@ -110,30 +111,53 @@ Log all API requests and responses to the status panel UI.
 - Includes: time, model, message count, I/O chars, duration, status
 - Maximum 50 entries stored
 - Clear logs via panel button
+- Logs are metadata-only (no raw prompt/response content); error entries show a bounded error category rather than raw exception text
 
 ---
 
-### copilotProxy.rawLogging
+### copilotProxy.allowedOrigins
 
-**Type:** `boolean`
-**Default:** `false`
+**Type:** `array` (of strings)
+**Default:** `[]` (empty - no browser origins allowed)
 
-Log raw request/response content to the output channel.
+Explicit allowlist of browser origins (e.g., `http://localhost:3000`) permitted to receive CORS headers from the proxy.
 
 **Example:**
 
 ```json
 {
-    "copilotProxy.rawLogging": true
+    "copilotProxy.allowedOrigins": ["http://localhost:3000", "http://127.0.0.1:5173"]
 }
 ```
 
 **Notes:**
 
-- Very verbose - may impact performance
-- Logs full JSON request bodies
-- Logs full response content
-- Useful for debugging
+- No wildcard (`*`) support - only exact origin strings are matched and echoed back
+- If a request's `Origin` header is absent or not present in this list, no `Access-Control-Allow-Origin` header is sent
+- Default is empty, meaning no browser-based cross-origin requests are permitted out of the box
+
+---
+
+### copilotProxy.allowAutoToolExecution
+
+**Type:** `boolean`
+**Default:** `false`
+
+Gates whether the proxy is permitted to automatically execute VS Code-registered tools server-side when a client requests `tool_execution: "auto"`.
+
+**Example:**
+
+```json
+{
+    "copilotProxy.allowAutoToolExecution": true
+}
+```
+
+**Notes:**
+
+- When `false` (default), requests with `tool_execution: "auto"` fall back to pass-through mode - clients cannot self-enable auto-execution via the request body
+- When `true`, the proxy will invoke VS Code tools on the client's behalf, bounded by `max_tool_rounds` (1-100)
+- Enable only if you trust the tools registered in your VS Code environment, since auto-execution runs with VS Code's own permissions
 
 ---
 

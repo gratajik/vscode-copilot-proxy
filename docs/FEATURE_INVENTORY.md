@@ -83,13 +83,13 @@ Refactoring effort to improve code organization, extract shared utilities, and a
 **Status:** Complete
 **Location:** `docs/features/security-hardening/`
 
-Security improvements including localhost-only CORS, request size limits, timeouts, and XSS prevention.
+Security improvements: SecretStorage-backed bearer-token authentication (deny-by-default), explicit CORS origin allowlist (no wildcards), localhost-only binding via shared constant, metadata-only logging with bounded error categories, and tool-execution gating (`allowAutoToolExecution` setting, bounded `max_tool_rounds`).
 
 | Item | Path |
 |------|------|
 | Design | `docs/features/security-hardening/design.md` |
 | Tasks | `docs/features/security-hardening/TASKS.md` |
-| Source | `src/core.ts` (getCorsHeaders, isLocalhostOrigin, escapeHtml) |
+| Source | `src/security.ts`, `src/extension.ts` (authenticateRequest, buildCorsHeaders wiring, tool-exec gating) |
 
 ---
 
@@ -97,16 +97,16 @@ Security improvements including localhost-only CORS, request size limits, timeou
 
 ### Tool Calling
 
-**Status:** Not Started
+**Status:** Complete
 **Location:** `docs/features/tool-calling/`
 
-OpenAI-compatible function/tool calling support with optional auto-execute mode.
+OpenAI-compatible function/tool calling support with optional auto-execute mode. As of the Sprint 4 security-hardening pass, `max_tool_rounds` is bounded 1-100 and auto-execute mode is gated by `copilotProxy.allowAutoToolExecution` (default `false`).
 
 | Item | Path |
 |------|------|
 | Design | `docs/features/tool-calling/design.md` |
 | Tasks | `docs/features/tool-calling/TASKS.md` |
-| Source | TBD |
+| Source | `src/extension.ts`, `src/core.ts`, `src/security.ts` (validateMaxToolRounds, isAutoExecutionAllowed) |
 
 **Phases:**
 
@@ -176,7 +176,8 @@ See `docs/CONFIGURATION.md` for detailed configuration documentation.
 | `copilotProxy.autoStart` | boolean | true | Auto-start on activation |
 | `copilotProxy.defaultModel` | string | "" | Default model ID |
 | `copilotProxy.logRequestsToUI` | boolean | false | Log requests to UI panel |
-| `copilotProxy.rawLogging` | boolean | false | Verbose output logging |
+| `copilotProxy.allowedOrigins` | array | [] | Explicit CORS origin allowlist (no wildcards) |
+| `copilotProxy.allowAutoToolExecution` | boolean | false | Gate for proxy-side automatic VS Code tool execution |
 
 ---
 
@@ -187,6 +188,7 @@ See `docs/CONFIGURATION.md` for detailed configuration documentation.
 | `copilot-proxy.start` | Start Server | Start the HTTP proxy server |
 | `copilot-proxy.stop` | Stop Server | Stop the HTTP proxy server |
 | `copilot-proxy.status` | Show Status | Open the status webview panel |
+| `copilot-proxy.setProxyToken` | Set Proxy Token | Set the bearer token required to authenticate API requests (stored in VS Code SecretStorage) |
 
 ---
 
@@ -225,5 +227,5 @@ npm run docs:inventory  # Update feature inventory
 ---
 
 **Created:** 2025-12-20
-**Last Updated:** 2025-12-20
-**Last Updated By:** Claude Code
+**Last Updated:** 2026-09-01
+**Last Updated By:** Dev Team (Sage/Nova/Milo)

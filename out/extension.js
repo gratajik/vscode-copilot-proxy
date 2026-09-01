@@ -48,11 +48,38 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const http = __importStar(require("http"));
 const core_1 = require("./core");
+const security_1 = require("./security");
 let server = null;
 const activeSockets = new Set();
 let statusBarItem;
 let outputChannel;
 let statusPanel;
+// Secret storage key for the proxy bearer token (see setProxyToken command / authenticateRequest).
+const PROXY_TOKEN_SECRET_KEY = 'copilotProxy.proxyToken';
+/**
+ * Authenticates an incoming HTTP request against the stored proxy token.
+ * Denies by default when no token has been configured (safer than open access).
+ * Never logs the Authorization header, parsed token, or stored token.
+ */
+async function authenticateRequest(req) {
+    const storedToken = await extensionContext?.secrets.get(PROXY_TOKEN_SECRET_KEY);
+    if (!storedToken)
+        return false;
+    const parsedToken = (0, security_1.parseBearerToken)(req.headers.authorization);
+    if (!parsedToken)
+        return false;
+    return (0, security_1.constantTimeEqual)(parsedToken, storedToken);
+}
+/**
+ * Computes CORS headers for a given request using the configured origin allowlist.
+ * Thin wrapper around security.ts's buildCorsHeaders so call sites don't each
+ * need to read configuration.
+ */
+function getRequestCorsHeaders(req) {
+    const config = vscode.workspace.getConfiguration('copilotProxy');
+    const allowedOrigins = config.get('allowedOrigins', []);
+    return (0, security_1.buildCorsHeaders)(req.headers.origin, allowedOrigins);
+}
 // Visual symbols for log messages
 const LOG_SYMBOLS = {
     startup: '🚀',
@@ -109,17 +136,6 @@ function logError(message, error) {
     const fullMessage = errorDetails ? `${message} - ${errorDetails}` : message;
     console.error(`[Copilot Proxy] ERROR: ${message}`, error);
     outputChannel?.error(`${LOG_SYMBOLS.error} ${fullMessage}`);
-}
-function logRaw(label, content) {
-    const config = vscode.workspace.getConfiguration('copilotProxy');
-    if (!config.get('rawLogging', false))
-        return;
-    const separator = '━'.repeat(50);
-    outputChannel?.debug(`┏${separator}┓`);
-    outputChannel?.debug(`┃ 📋 RAW ${label}`);
-    outputChannel?.debug(`┣${separator}┫`);
-    content.split('\n').forEach(line => outputChannel?.debug(`┃ ${line}`));
-    outputChannel?.debug(`┗${separator}┛`);
 }
 /**
  * Sends a standardized HTTP error response.
@@ -610,8 +626,6 @@ async function handleChatCompletion(req, res) {
             }
             const request = parsed;
             const requestId = (0, core_1.generateId)();
-            // Raw logging of request
-            logRaw('REQUEST', JSON.stringify(request, null, 2));
             const model = await getModel(request.model);
             // Calculate context size
             const messageCount = request.messages.length;
@@ -647,15 +661,21 @@ async function handleChatCompletion(req, res) {
                 // specific function - filter to single tool (not supported by VS Code API directly)
             }
             // Handle auto-execute mode (server-side tool execution)
-            if (request.tool_execution === 'auto' && hasTools) {
+            const autoToolConfig = vscode.workspace.getConfiguration('copilotProxy');
+            const allowAutoToolExecution = autoToolConfig.get('allowAutoToolExecution', false);
+            if ((0, security_1.isAutoExecutionAllowed)(request.tool_execution, allowAutoToolExecution) && hasTools) {
                 log('Auto-execute mode enabled', 'tool');
+                const maxRounds = (0, security_1.validateMaxToolRounds)(request.max_tool_rounds);
+                if (maxRounds === null) {
+                    sendErrorResponse(res, 400, 'max_tool_rounds must be an integer between 1 and 100', 'invalid_request_error');
+                    clearTimeout(timeoutId);
+                    cancellationSource.dispose();
+                    return;
+                }
                 try {
-                    const maxRounds = request.max_tool_rounds ?? core_1.DEFAULT_MAX_TOOL_ROUNDS;
                     const result = await runAutoExecuteLoop(model, request.model, vsCodeMessages, options, maxRounds, cancellationSource.token);
                     const responseTokens = Math.ceil(result.content.length / 4);
                     log(`Auto-execute response: ~${result.content.length} chars (~${responseTokens} tokens), ${result.toolCallsExecuted} tool call(s) executed`);
-                    // Raw logging of response
-                    logRaw('RESPONSE (auto-execute)', result.content);
                     // Return final response (no tool_calls - they were executed)
                     const openAIResponse = {
                         id: (0, core_1.generateId)(),
@@ -679,7 +699,7 @@ async function handleChatCompletion(req, res) {
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
                         'Connection': 'close',
-                        ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                        ...getRequestCorsHeaders(req)
                     });
                     res.end(JSON.stringify(openAIResponse));
                     // Log to UI
@@ -714,7 +734,7 @@ async function handleChatCompletion(req, res) {
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -729,7 +749,7 @@ async function handleChatCompletion(req, res) {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
-                    ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                    ...getRequestCorsHeaders(req)
                 });
                 // Replace absolute deadline with activity-based inactivity timeout
                 clearTimeout(timeoutId);
@@ -762,7 +782,6 @@ async function handleChatCompletion(req, res) {
                     res.write(`data: ${JSON.stringify(initialChunk)}\n\n`);
                     // Stream content and tool call chunks
                     let responseChars = 0;
-                    let fullResponse = '';
                     const toolCalls = [];
                     const toolCallArgumentsBuffer = new Map();
                     let toolCallIndex = 0;
@@ -778,7 +797,6 @@ async function handleChatCompletion(req, res) {
                             // Regular text content
                             const text = part.value;
                             responseChars += text.length;
-                            fullResponse += text;
                             const streamChunk = {
                                 id,
                                 object: 'chat.completion.chunk',
@@ -839,7 +857,7 @@ async function handleChatCompletion(req, res) {
                             };
                             res.write(`data: ${JSON.stringify(argsChunk)}\n\n`);
                             toolCallIndex++;
-                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
+                            log(`Tool call: ${toolCall.function.name} (${toolCall.function.arguments.length} arg chars)`, 'tool');
                         }
                     }
                     // Send final chunk with appropriate finish_reason
@@ -861,8 +879,6 @@ async function handleChatCompletion(req, res) {
                     const responseTokens = Math.ceil(responseChars / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
                     log(`Response (stream): ~${responseChars} chars (~${responseTokens} tokens)${toolInfo}`, 'stream');
-                    // Raw logging of response
-                    logRaw('RESPONSE (stream)', fullResponse + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
                     // Log to UI
                     addRequestLog({
                         id: requestId,
@@ -882,8 +898,6 @@ async function handleChatCompletion(req, res) {
                     const durationMs = Date.now() - startTime;
                     logError(`Streaming request failed after ${durationMs}ms`, error);
                     const errorMessage = describeRequestError(error);
-                    const errorStack = error instanceof Error ? error.stack : String(error);
-                    logRaw('ERROR (stream)', `${errorMessage}\n\nDuration: ${durationMs}ms\n\nStack:\n${errorStack}`);
                     // Send error in proper SSE format with consistent error structure
                     res.write(`data: ${JSON.stringify((0, core_1.createErrorResponse)(errorMessage, 'server_error', 500))}\n\n`);
                     res.end();
@@ -900,7 +914,7 @@ async function handleChatCompletion(req, res) {
                         stream: true,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -927,14 +941,12 @@ async function handleChatCompletion(req, res) {
                         else if (part instanceof vscode.LanguageModelToolCallPart) {
                             const toolCall = convertToolCallPart(part);
                             toolCalls.push(toolCall);
-                            log(`Tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
+                            log(`Tool call: ${toolCall.function.name} (${toolCall.function.arguments.length} arg chars)`, 'tool');
                         }
                     }
                     const responseTokens = Math.ceil(content.length / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
                     log(`Response: ~${content.length} chars (~${responseTokens} tokens)${toolInfo}`, 'response');
-                    // Raw logging of response
-                    logRaw('RESPONSE', content + (toolCalls.length > 0 ? `\n\nTool calls: ${JSON.stringify(toolCalls, null, 2)}` : ''));
                     // Build response with or without tool calls
                     const openAIResponse = {
                         id: (0, core_1.generateId)(),
@@ -959,7 +971,7 @@ async function handleChatCompletion(req, res) {
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
                         'Connection': 'close',
-                        ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                        ...getRequestCorsHeaders(req)
                     });
                     res.end(JSON.stringify(openAIResponse));
                     // Log to UI
@@ -981,8 +993,6 @@ async function handleChatCompletion(req, res) {
                     const durationMs = Date.now() - startTime;
                     logError(`Non-streaming request failed after ${durationMs}ms`, error);
                     const errorMessage = describeRequestError(error);
-                    const errorStack = error instanceof Error ? error.stack : String(error);
-                    logRaw('ERROR', `${errorMessage}\n\nDuration: ${durationMs}ms\n\nStack:\n${errorStack}`);
                     if (error instanceof CopilotNotReadyError) {
                         sendErrorResponse(res, 503, errorMessage, 'service_unavailable');
                     }
@@ -1002,7 +1012,7 @@ async function handleChatCompletion(req, res) {
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -1099,7 +1109,6 @@ async function handleAnthropicMessages(req, res) {
             }
             const request = parsed;
             const requestId = (0, core_1.generateAnthropicId)();
-            logRaw('ANTHROPIC REQUEST', JSON.stringify(request, null, 2));
             const model = await getModel(request.model);
             // Convert Anthropic messages to internal format
             const internalMessages = (0, core_1.convertAnthropicToInternal)(request);
@@ -1132,18 +1141,25 @@ async function handleAnthropicMessages(req, res) {
                 }
             }
             // Handle auto-execute mode
-            if (request.tool_execution === 'auto' && hasTools) {
+            const anthropicAutoToolConfig = vscode.workspace.getConfiguration('copilotProxy');
+            const anthropicAllowAutoToolExecution = anthropicAutoToolConfig.get('allowAutoToolExecution', false);
+            if ((0, security_1.isAutoExecutionAllowed)(request.tool_execution, anthropicAllowAutoToolExecution) && hasTools) {
                 log('Anthropic auto-execute mode enabled', 'tool');
+                const maxRounds = (0, security_1.validateMaxToolRounds)(request.max_tool_rounds);
+                if (maxRounds === null) {
+                    sendAnthropicErrorResponse(res, 400, 'max_tool_rounds must be an integer between 1 and 100', 'invalid_request_error');
+                    clearTimeout(timeoutId);
+                    cancellationSource.dispose();
+                    return;
+                }
                 try {
-                    const maxRounds = request.max_tool_rounds ?? core_1.DEFAULT_MAX_TOOL_ROUNDS;
                     const result = await runAutoExecuteLoop(model, request.model, vsCodeMessages, options, maxRounds, cancellationSource.token);
                     log(`Anthropic auto-execute response: ~${result.content.length} chars, ${result.toolCallsExecuted} tool call(s)`);
-                    logRaw('ANTHROPIC RESPONSE (auto-execute)', result.content);
                     const anthropicResponse = (0, core_1.createAnthropicResponse)(requestId, model.id, result.content);
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
                         'Connection': 'close',
-                        ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                        ...getRequestCorsHeaders(req)
                     });
                     res.end(JSON.stringify(anthropicResponse));
                     addRequestLog({
@@ -1182,7 +1198,7 @@ async function handleAnthropicMessages(req, res) {
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -1197,7 +1213,7 @@ async function handleAnthropicMessages(req, res) {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
-                    ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                    ...getRequestCorsHeaders(req)
                 });
                 // Replace absolute deadline with activity-based inactivity timeout
                 clearTimeout(timeoutId);
@@ -1228,7 +1244,6 @@ async function handleAnthropicMessages(req, res) {
                     // Send ping
                     writeAnthropicSSE(res, { type: 'ping' });
                     let responseChars = 0;
-                    let fullResponse = '';
                     const toolCalls = [];
                     let contentBlockIndex = 0;
                     let textBlockStarted = false;
@@ -1242,7 +1257,6 @@ async function handleAnthropicMessages(req, res) {
                         if (part instanceof vscode.LanguageModelTextPart) {
                             const text = part.value;
                             responseChars += text.length;
-                            fullResponse += text;
                             // Start text content block if not started
                             if (!textBlockStarted) {
                                 writeAnthropicSSE(res, {
@@ -1294,7 +1308,7 @@ async function handleAnthropicMessages(req, res) {
                             });
                             writeAnthropicSSE(res, { type: 'content_block_stop', index: contentBlockIndex });
                             contentBlockIndex++;
-                            log(`Anthropic tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
+                            log(`Anthropic tool call: ${toolCall.function.name} (${toolCall.function.arguments.length} arg chars)`, 'tool');
                         }
                     }
                     // Close text block if still open
@@ -1314,7 +1328,6 @@ async function handleAnthropicMessages(req, res) {
                     const responseTokens = Math.ceil(responseChars / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
                     log(`Anthropic response (stream): ~${responseChars} chars (~${responseTokens} tokens)${toolInfo}`, 'stream');
-                    logRaw('ANTHROPIC RESPONSE (stream)', fullResponse);
                     addRequestLog({
                         id: requestId,
                         timestamp: new Date().toISOString(),
@@ -1347,7 +1360,7 @@ async function handleAnthropicMessages(req, res) {
                         stream: true,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -1373,18 +1386,17 @@ async function handleAnthropicMessages(req, res) {
                         else if (part instanceof vscode.LanguageModelToolCallPart) {
                             const toolCall = convertToolCallPart(part);
                             toolCalls.push(toolCall);
-                            log(`Anthropic tool call: ${toolCall.function.name}(${toolCall.function.arguments})`, 'tool');
+                            log(`Anthropic tool call: ${toolCall.function.name} (${toolCall.function.arguments.length} arg chars)`, 'tool');
                         }
                     }
                     const responseTokens = Math.ceil(content.length / 4);
                     const toolInfo = toolCalls.length > 0 ? `, ${toolCalls.length} tool call(s)` : '';
                     log(`Anthropic response: ~${content.length} chars (~${responseTokens} tokens)${toolInfo}`, 'response');
-                    logRaw('ANTHROPIC RESPONSE', content);
                     const anthropicResponse = (0, core_1.createAnthropicResponse)(requestId, model.id, content, toolCalls.length > 0 ? toolCalls : undefined);
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
                         'Connection': 'close',
-                        ...(0, core_1.getCorsHeaders)(req.headers.origin)
+                        ...getRequestCorsHeaders(req)
                     });
                     res.end(JSON.stringify(anthropicResponse));
                     addRequestLog({
@@ -1423,7 +1435,7 @@ async function handleAnthropicMessages(req, res) {
                         stream: false,
                         durationMs: Date.now() - startTime,
                         status: 'error',
-                        errorMessage
+                        errorMessage: (0, security_1.categorizeError)(error)
                     });
                 }
                 finally {
@@ -1488,24 +1500,33 @@ function handleHealth(res, corsHeaders) {
 function createServer(_port) {
     return http.createServer(async (req, res) => {
         const origin = req.headers.origin;
-        const corsHeaders = (0, core_1.getCorsHeaders)(origin);
-        // Handle CORS preflight
+        const config = vscode.workspace.getConfiguration('copilotProxy');
+        const allowedOrigins = config.get('allowedOrigins', []);
+        const corsHeaders = (0, security_1.buildCorsHeaders)(origin, allowedOrigins);
+        // Handle CORS preflight (no auth check needed for preflight)
         if (req.method === 'OPTIONS') {
             res.writeHead(200, corsHeaders);
             res.end();
-            return;
-        }
-        // Block requests from non-localhost origins (browser security)
-        if (origin && !(0, core_1.isLocalhostOrigin)(origin)) {
-            log(`Blocked request from non-localhost origin: ${origin}`);
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: 'Forbidden: non-localhost origin', type: 'forbidden' } }));
             return;
         }
         const url = req.url || '';
         log(`${req.method} ${url}`, 'request');
         // Parse URL to extract path without query params for routing
         const urlPath = url.split('?')[0];
+        // Require proxy authentication for every route except the exempt health check.
+        // Requests with no Origin header (curl, server-to-server) are still processable,
+        // subject to this auth check.
+        if (!(0, security_1.isAuthExemptRoute)(req.method || '', urlPath)) {
+            const authenticated = await authenticateRequest(req);
+            if (!authenticated) {
+                res.writeHead(401, {
+                    'Content-Type': 'application/json',
+                    ...corsHeaders
+                });
+                res.end(JSON.stringify((0, core_1.createErrorResponse)('Missing or invalid proxy authorization', 'unauthorized', 401)));
+                return;
+            }
+        }
         if (req.method === 'POST' && (urlPath === '/v1/chat/completions' || urlPath === '/chat/completions')) {
             await handleChatCompletion(req, res);
         }
@@ -1553,7 +1574,7 @@ async function startServer() {
             log(`Connection closed (${activeSockets.size} active)`, 'disconnect');
         });
     });
-    server.listen(port, '127.0.0.1', async () => {
+    server.listen(port, security_1.LOOPBACK_HOST, async () => {
         log(`Server running on 127.0.0.1:${port}`, 'success');
         log(`Endpoint: http://127.0.0.1:${port}/v1/chat/completions`, 'info');
         log(`Endpoint: http://127.0.0.1:${port}/v1/messages (Anthropic)`, 'info');
@@ -1787,10 +1808,6 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
                 <div class="setting-item">
                     <label class="setting-label" for="logRequestsInput">Log Requests to UI</label>
                     <input type="checkbox" id="logRequestsInput" class="setting-checkbox" ${settings.logRequestsToUI ? 'checked' : ''} />
-                </div>
-                <div class="setting-item">
-                    <label class="setting-label" for="rawLoggingInput">Raw Logging (verbose)</label>
-                    <input type="checkbox" id="rawLoggingInput" class="setting-checkbox" ${settings.rawLogging ? 'checked' : ''} />
                 </div>
             </div>
         </div>
@@ -2336,13 +2353,6 @@ function getWebviewContent(isRunning, port, models, settings, logs = [], session
             });
         }
 
-        const rawLoggingInput = document.getElementById('rawLoggingInput');
-        if (rawLoggingInput) {
-            rawLoggingInput.addEventListener('change', (e) => {
-                vscode.postMessage({ command: 'updateSetting', key: 'rawLogging', value: e.target.checked });
-            });
-        }
-
         const clearLogsBtn = document.getElementById('clearLogsBtn');
         if (clearLogsBtn) {
             clearLogsBtn.addEventListener('click', () => {
@@ -2461,7 +2471,6 @@ function updateStatusPanel() {
     const autoStart = config.get('autoStart', true);
     const defaultModel = config.get('defaultModel', '');
     const logRequestsToUI = config.get('logRequestsToUI', false);
-    const rawLogging = config.get('rawLogging', false);
     const isRunning = server !== null;
     // Map and sort models alphabetically by name
     const models = cachedModels
@@ -2477,8 +2486,7 @@ function updateStatusPanel() {
         port,
         autoStart,
         defaultModel,
-        logRequestsToUI,
-        rawLogging
+        logRequestsToUI
     };
     statusPanel.webview.html = getWebviewContent(isRunning, port, models, settings, logRequestsToUI ? requestLogs : [], sessionStats, lifetimeStats);
 }
@@ -2513,7 +2521,18 @@ function activate(context) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
     // Register commands
-    context.subscriptions.push(vscode.commands.registerCommand('copilot-proxy.start', startServer), vscode.commands.registerCommand('copilot-proxy.stop', stopServer), vscode.commands.registerCommand('copilot-proxy.status', showStatus));
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-proxy.start', startServer), vscode.commands.registerCommand('copilot-proxy.stop', stopServer), vscode.commands.registerCommand('copilot-proxy.status', showStatus), vscode.commands.registerCommand('copilot-proxy.setProxyToken', async () => {
+        const token = await vscode.window.showInputBox({
+            prompt: 'Enter a new proxy bearer token',
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: v => v.trim().length === 0 ? 'Token cannot be empty' : null
+        });
+        if (token) {
+            await context.secrets.store(PROXY_TOKEN_SECRET_KEY, token);
+            vscode.window.showInformationMessage('Copilot Proxy: token updated.');
+        }
+    }));
     // Listen for model changes
     context.subscriptions.push(vscode.lm.onDidChangeChatModels(() => {
         log('Chat models changed, refreshing...');

@@ -139,7 +139,7 @@ interface ChatCompletionRequest {
     // NEW: Proxy-specific tool options
     use_vscode_tools?: boolean;      // Include all VS Code registered tools
     tool_execution?: 'none' | 'auto'; // Server-side tool execution mode
-    max_tool_rounds?: number;         // Max iterations (default: 10, 0 = unlimited)
+    max_tool_rounds?: number;         // Max iterations (default: 10, bounded 1-100; 400 if out of range)
 }
 
 interface Tool {
@@ -172,7 +172,13 @@ Controls whether the proxy executes tools server-side or returns tool calls to t
 | Mode | Behavior |
 |------|----------|
 | `"none"` (default) | Pass-through mode - return tool calls to client |
-| `"auto"` | Proxy executes tools via `vscode.lm.invokeTool()` and loops until complete |
+| `"auto"` | Proxy executes tools via `vscode.lm.invokeTool()` and loops until complete (gated - see below) |
+
+**Auto-Execution Gate (`copilotProxy.allowAutoToolExecution`, Sprint 4 hardening):**
+
+Auto-execution requires the VS Code setting `copilotProxy.allowAutoToolExecution` to be `true` (default: `false`). A client cannot enable auto mode purely by sending `tool_execution: "auto"` in the request body - if the setting is `false`, the request is silently treated as pass-through (`tool_execution: "none"`) regardless of what the client requested. This prevents a client-controlled flag from unilaterally granting itself server-side tool execution privileges. See `src/security.ts`'s `isAutoExecutionAllowed()`.
+
+**`max_tool_rounds` bounds (Sprint 4 hardening):** the original design allowed `0` to mean "unlimited" iterations. This has been removed - `max_tool_rounds` is now validated (`validateMaxToolRounds()` in `src/security.ts`) to be an integer in the range **1-100** (`MAX_TOOL_ROUNDS_CAP`). Values outside this range return `400 Bad Request`; if omitted, the default is `10` (`DEFAULT_TOOL_ROUNDS`).
 
 **Auto Mode Flow**:
 ```
@@ -366,7 +372,8 @@ function convertToolResultMessage(msg: ChatMessage): vscode.LanguageModelChatMes
 
 ## Configuration
 
-No new configuration required. Tool calling is automatically enabled when tools are provided in the request.
+- `copilotProxy.allowAutoToolExecution` (boolean, default `false`) - gates whether `tool_execution: "auto"` is honored server-side (added in the Sprint 4 security-hardening pass; see `docs/features/security-hardening/design.md`).
+- `max_tool_rounds` (request field, not a VS Code setting) is bounded 1-100 as of the same hardening pass.
 
 ## Error Handling
 
@@ -469,8 +476,9 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1.0 | 2025-12-20 | Initial design |
+| 0.2.0 | 2026-09-01 | Sprint 4 hardening: `max_tool_rounds` bounded 1-100 (removed 0=unlimited); added `copilotProxy.allowAutoToolExecution` gate for auto-execution mode |
 
 ---
 
-**Last Updated:** 2025-12-20
-**Last Updated By:** Claude Code
+**Last Updated:** 2026-09-01
+**Last Updated By:** Dev Team (Sage)

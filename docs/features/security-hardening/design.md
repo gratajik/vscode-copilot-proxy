@@ -1,9 +1,84 @@
 # Security Hardening Feature Design
 
 **Feature:** Security Hardening
-**Status:** Planning
+**Status:** Complete (Sprints 1-4 implemented)
 **Created:** 2025-12-14
-**Last Updated:** 2025-12-14
+**Last Updated:** 2026-09-01
+**Last Updated By:** Dev Team (Sage/Nova/Milo)
+
+> **Implementation note (Sprint 4):** This document originally described the *planned* design (see "Original Plan (Historical)" below for the as-written proposal). The sections above the historical appendix describe **what was actually implemented** across Sprints 1-4, which diverges from the original plan in several ways (SecretStorage-backed bearer token instead of a generated/displayed API key; deny-by-default auth; explicit CORS allowlist instead of `null`/localhost-regex; no rate limiting, connection limiting, or prompt-filtering features were implemented; metadata-only logging via bounded error categories instead of a generic `sanitizeErrorMessage()` path-stripping function).
+
+## What Was Actually Built
+
+### Sprint 1 - `src/security.ts` (pure helpers) + tests
+
+- `LOOPBACK_HOST` constant (`127.0.0.1`)
+- `parseBearerToken(header)` - extracts a bearer token from an `Authorization` header
+- `constantTimeEqual(a, b)` - timing-safe string comparison for token checks
+- `isAuthExemptRoute(path)` - identifies routes (currently `GET /health`) exempt from auth
+- `normalizeOrigin(origin)` / `isOriginAllowed(origin, allowlist)` - origin allowlist matching (exact match, no wildcards)
+- `buildCorsHeaders(origin, allowlist)` - returns CORS headers only when origin is present and allowlisted; otherwise no `Access-Control-Allow-Origin` header at all
+- `categorizeError(error)` - maps arbitrary errors to a small fixed set of category strings (never raw exception text/stack traces/paths)
+- `validateMaxToolRounds(value)` - validates `max_tool_rounds` is an integer in `[1, MAX_TOOL_ROUNDS_CAP]` (100); returns error for out-of-range/invalid values
+- `isAutoExecutionAllowed(requestedMode, settingEnabled)` - a client's `tool_execution: "auto"` is only honored if `copilotProxy.allowAutoToolExecution` is `true`
+- `MAX_TOOL_ROUNDS_CAP = 100`, `DEFAULT_TOOL_ROUNDS = 10`
+- `src/test/security.test.ts` - unit tests for all of the above
+
+### Sprint 2 - wiring into `package.json` and `src/extension.ts`
+
+- New settings: `copilotProxy.allowedOrigins` (array, default `[]`), `copilotProxy.allowAutoToolExecution` (boolean, default `false`)
+- New command: `copilot-proxy.setProxyToken` - prompts for and stores a bearer token via `context.secrets` (VS Code SecretStorage), never written to settings/files
+- `authenticateRequest()` in `extension.ts`: reads the stored token, extracts the request's bearer token, does a constant-time comparison; **deny-by-default** if no token has been set (all non-exempt requests are rejected with `401`); `GET /health` is exempt
+- CORS responses built via `buildCorsHeaders()` - no wildcard `*`, only allowlisted origins are echoed
+- `server.listen()` uses the shared `LOOPBACK_HOST` constant (still `127.0.0.1`, but now sourced from `security.ts` rather than a literal)
+- Tool-execution gating wired via `isAutoExecutionAllowed()` / `validateMaxToolRounds()` - a client cannot self-enable auto-execution; `max_tool_rounds` outside `[1,100]` returns `400`
+- `src/test/extension-integration.test.ts` - 9 integration tests covering auth, CORS, and tool-exec gating
+
+### Sprint 3 - logging hardening
+
+- Removed `logRaw()` entirely and the `copilotProxy.rawLogging` setting completely - there is no raw/verbose logging mode
+- `addRequestLog()`'s persisted `errorMessage` field now always uses `categorizeError(error)` (fixed enum of categories), never raw exception text
+- Client-facing HTTP error responses still use the existing human-readable `describeRequestError(error)` (intentional: this is a log-vs-response distinction, not a regression - log storage never contains raw text, but the client still gets an understandable error response)
+- Tool-call logging is metadata-only (argument character count, not argument content)
+- `src/test/log-redaction.test.ts` - 6 tests verifying no raw content or stack traces reach persisted logs
+
+### Sprint 4 - documentation + final verification (this sprint)
+
+- No further source logic changes
+- README.md, `docs/CONFIGURATION.md`, `docs/features/tool-calling/design.md`, `docs/FEATURE_INVENTORY.md`, and this file updated to accurately describe the implemented behavior
+- Full verification: `npm run compile`, `npm run lint`, `npm test`, and (if present) `npm run docs:check`
+- Local `.vsix` packaging via `vsce package` for handoff/QA
+
+## Divergences From the Original Plan (Historical, see appendix)
+
+| Original Plan | What Was Actually Built | Why |
+|---|---|---|
+| Generated/displayed API key (`generateApiKey`, `showApiKey`, `rotateApiKey` commands); `requireAuth` opt-in setting (default `false`) | Single `copilot-proxy.setProxyToken` command; user supplies their own token; auth is **always on** and **deny-by-default** (no `requireAuth` opt-out) | Simpler UX, and always-on auth closes the "forgot to enable it" gap entirely |
+| CORS: `Access-Control-Allow-Origin: null` + regex-based localhost-only origin validation | CORS: explicit `copilotProxy.allowedOrigins` array allowlist, exact match only, no regex/wildcard | Explicit allowlist is more auditable and avoids regex bypass edge cases; also supports legitimate non-localhost dev origins (e.g. a LAN dev box) the user explicitly trusts |
+| `sanitizeErrorMessage()` - regex-strips file paths/stack traces from error text, falls back to generic messages for known system error codes | `categorizeError()` - maps to a small fixed enum of categories; no attempt to selectively redact substrings of arbitrary error text | Categorization is a stronger guarantee than best-effort regex redaction (regex redaction can miss unanticipated leak patterns) |
+| Rate limiting (`RateLimiter` class, 429 responses), connection limiting (503 responses), prompt-content filtering, security response headers (`X-Content-Type-Options` etc.), settings validation for webview updates | **Not implemented** - out of scope for Sprints 1-4 | These were P2/P3 items in the original phased plan; the delivered sprints focused on the P0/P1-equivalent items (localhost binding, auth, CORS, error/log redaction) plus tool-exec gating which was newly identified during implementation. Not fixing a bug silently - flagging as a known gap below. |
+| `MAX_MESSAGES`/`MAX_MESSAGE_LENGTH` input validation limits, crypto-random ID generation, connection/rate-limit settings in `package.json` | **Not implemented** | Same as above - out of scope for the delivered sprints |
+
+## Known Gaps / Not Implemented (carried forward, not silently dropped)
+
+The following P2/P3 items from the original assessment were **not** addressed in Sprints 1-4 and remain open for a future sprint if desired:
+
+- Rate limiting / 429 responses
+- Connection limiting / 503 responses
+- Security response headers (`X-Content-Type-Options`, `X-Frame-Options`, etc.)
+- Optional prompt-content/jailbreak filtering
+- `MAX_MESSAGES` / `MAX_MESSAGE_LENGTH` input validation limits
+- `crypto.randomBytes()`-based ID generation (still uses prior ID generation scheme)
+- Settings validation for webview `updateSetting` handler
+
+---
+
+## Original Plan (Historical)
+
+*The remainder of this document is the original Sprint-0 design proposal, preserved for historical reference. It does not reflect final implementation - see "What Was Actually Built" above for the authoritative description.*
+
+**Original Status:** Planning
+**Original Created:** 2025-12-14
 
 ## Overview
 

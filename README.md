@@ -44,6 +44,57 @@ Perfect for developers who want to use Copilot's models in custom workflows, aut
 1. **GitHub Copilot Subscription** - Individual, Business, or Enterprise
 2. **VS Code** with the GitHub Copilot extension installed and authenticated
 
+## Security / Local Setup
+
+> **This extension is intended for isolated local development use only** - it is not designed, hardened, or supported as a public-facing or network-exposed service. Do not expose it beyond your own machine.
+
+### 1. Set your proxy bearer token (required)
+
+Every request to the proxy (except `GET /health`) must be authenticated. Set a token before first use:
+
+1. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+2. Run **`Copilot Proxy: Set Proxy Token`** (`copilot-proxy.setProxyToken`)
+3. Enter a token value when prompted
+
+The token is stored using VS Code's **SecretStorage** API - it is never written to `settings.json`, workspace files, or plaintext on disk. If no token has been set, the server denies all authenticated requests by default (deny-by-default), returning `401 Unauthorized`.
+
+Include the token on every request:
+
+```
+Authorization: Bearer <your-token>
+```
+
+Missing or invalid tokens return `401 Unauthorized`. `GET /health` is exempt from authentication (useful for lightweight liveness checks).
+
+### 2. Localhost-only binding
+
+The server binds to `127.0.0.1` (loopback) only. This is not configurable - there is no setting to bind to `0.0.0.0` or any other network interface. The port itself remains configurable via `copilotProxy.port`.
+
+### 3. CORS - explicit allowlist, no wildcards
+
+By default, `copilotProxy.allowedOrigins` is an empty array, meaning **no browser origins are allowed** and no `Access-Control-Allow-Origin` header is returned unless a request's `Origin` matches an entry in the allowlist. To permit a trusted local web tool (e.g., a local dev server on `http://localhost:3000`), add its exact origin to the setting:
+
+```json
+{
+  "copilotProxy.allowedOrigins": ["http://localhost:3000"]
+}
+```
+
+Wildcards (`*`) are not supported and cannot be configured - only exact, explicitly listed origins are ever echoed back.
+
+### 4. Model access is tied to your VS Code Copilot session
+
+All model calls go through the VS Code `vscode.lm` API, which uses whichever GitHub account **VS Code itself** is currently signed into for Copilot. This is independent of, and unrelated to, any account used by the `gh` CLI (`gh auth login`) on the same machine.
+
+### 5. Logging is metadata-only
+
+By default, and always, logging captures **metadata only** (message counts, character counts, estimated tokens, tool-call argument character counts, bounded error categories) - never raw prompt/response content or raw exception text. There is no raw/verbose logging mode; this cannot be re-enabled via settings.
+
+### 6. Tool-execution gating
+
+- `copilotProxy.allowAutoToolExecution` (default: `false`) gates whether the proxy is permitted to automatically execute VS Code tools on a client's behalf. Clients cannot self-enable auto-execution by setting `tool_execution: "auto"` in a request if this setting is `false` - the request falls back to pass-through mode.
+- `max_tool_rounds` is bounded to the range **1-100** (previously `0` meant "unlimited"; that behavior has been removed). Out-of-range values return `400 Bad Request`.
+
 ## Installation
 
 ### Manual Install - Preferred
@@ -155,7 +206,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8080/v1",
-    api_key="not-needed"  # Any value works
+    api_key="<your-proxy-token>"  # Set via Command Palette: Copilot Proxy: Set Proxy Token
 )
 
 response = client.chat.completions.create(
@@ -172,7 +223,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8080/v1",
-    api_key="not-needed"
+    api_key="<your-proxy-token>"  # Set via Command Palette: Copilot Proxy: Set Proxy Token
 )
 
 stream = client.chat.completions.create(
@@ -191,6 +242,7 @@ for chunk in stream:
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-3.5-sonnet",
     "messages": [{"role": "user", "content": "Write a haiku"}],
@@ -203,7 +255,10 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ```javascript
 const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer <your-proxy-token>'
+    },
     body: JSON.stringify({
         model: 'claude-3.5-sonnet',
         messages: [{ role: 'user', content: 'Hello!' }]
@@ -222,8 +277,8 @@ You can use the proxy to run [Claude Code](https://docs.anthropic.com/en/docs/cl
 ```powershell
 $env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:8080'
 $env:ANTHROPIC_MODEL = 'claude-opus-4.6'
-$env:ANTHROPIC_AUTH_TOKEN = 'a'
-$env:ANTHROPIC_API_KEY = 'a'
+$env:ANTHROPIC_AUTH_TOKEN = '<your-proxy-token>'
+$env:ANTHROPIC_API_KEY = '<your-proxy-token>'
 claude
 ```
 
@@ -232,12 +287,12 @@ claude
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
 export ANTHROPIC_MODEL="claude-opus-4.6"
-export ANTHROPIC_AUTH_TOKEN="a"
-export ANTHROPIC_API_KEY="a"
+export ANTHROPIC_AUTH_TOKEN="<your-proxy-token>"
+export ANTHROPIC_API_KEY="<your-proxy-token>"
 claude
 ```
 
-> **Note:** The `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` values can be anything - the proxy doesn't validate them. The `ANTHROPIC_MODEL` should be a valid Anthropic model name that Claude Code recognizes. The proxy maps all requests to the best available Copilot model (or the model configured in `copilotProxy.defaultModel`).
+> **Note:** The `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` values must match the proxy token you set via `copilot-proxy.setProxyToken` (Claude Code sends them as the bearer token/`x-api-key`). The `ANTHROPIC_MODEL` should be a valid Anthropic model name that Claude Code recognizes. The proxy maps all requests to the best available Copilot model (or the model configured in `copilotProxy.defaultModel`).
 
 ### With Anthropic Python SDK
 
@@ -246,7 +301,7 @@ import anthropic
 
 client = anthropic.Anthropic(
     base_url="http://127.0.0.1:8080",
-    api_key="not-needed"  # Any value works
+    api_key="<your-proxy-token>"  # Must match token set via Copilot Proxy: Set Proxy Token
 )
 
 message = client.messages.create(
@@ -262,7 +317,8 @@ print(message.content[0].text)
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/messages \
   -H "Content-Type: application/json" \
-  -H "x-api-key: a" \
+  -H "x-api-key: <your-proxy-token>" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-sonnet-4-20250514",
     "max_tokens": 1024,
@@ -277,7 +333,7 @@ from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
     base_url="http://127.0.0.1:8080/v1",
-    api_key="not-needed",
+    api_key="<your-proxy-token>",
     model="claude-3.5-sonnet"
 )
 
@@ -296,7 +352,8 @@ Anthropic-compatible messages endpoint. Works with the Anthropic SDK and Claude 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/messages \
   -H "Content-Type: application/json" \
-  -H "x-api-key: a" \
+  -H "x-api-key: <your-proxy-token>" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-sonnet-4-20250514",
     "max_tokens": 1024,
@@ -344,6 +401,7 @@ OpenAI-compatible chat completions endpoint.
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-3.5-sonnet",
     "messages": [{"role": "user", "content": "Hello!"}],
@@ -392,7 +450,8 @@ Server-Sent Events (SSE) format compatible with OpenAI's streaming API.
 List available models.
 
 ```bash
-curl http://127.0.0.1:8080/v1/models
+curl http://127.0.0.1:8080/v1/models \
+  -H "Authorization: Bearer <your-proxy-token>"
 ```
 
 **Response:**
@@ -417,7 +476,7 @@ curl http://127.0.0.1:8080/v1/models
 
 ### GET `/health`
 
-Health check endpoint.
+Health check endpoint. This is the only endpoint exempt from bearer-token authentication.
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -438,13 +497,16 @@ List available tools from VS Code (built-in, extensions, and MCP servers).
 
 ```bash
 # List all tools
-curl http://127.0.0.1:8080/v1/tools
+curl http://127.0.0.1:8080/v1/tools \
+  -H "Authorization: Bearer <your-proxy-token>"
 
 # Filter by tags
-curl "http://127.0.0.1:8080/v1/tools?tags=vscode,editor"
+curl "http://127.0.0.1:8080/v1/tools?tags=vscode,editor" \
+  -H "Authorization: Bearer <your-proxy-token>"
 
 # Filter by name pattern
-curl "http://127.0.0.1:8080/v1/tools?name=get_*"
+curl "http://127.0.0.1:8080/v1/tools?name=get_*" \
+  -H "Authorization: Bearer <your-proxy-token>"
 ```
 
 **Response:**
@@ -475,6 +537,7 @@ In pass-through mode, the proxy returns tool calls to your application. You exec
 # Step 1: Send request with tools
 curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-3.5-sonnet",
     "messages": [{"role": "user", "content": "What is the weather in London?"}],
@@ -506,6 +569,7 @@ In auto-execute mode, the proxy handles tool execution using VS Code's registere
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-proxy-token>" \
   -d '{
     "model": "claude-3.5-sonnet",
     "messages": [{"role": "user", "content": "List files in the src folder"}],
@@ -515,6 +579,8 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
+> **Note:** Auto-execute mode also requires `copilotProxy.allowAutoToolExecution` to be `true` in VS Code settings (default: `false`). A client cannot enable this itself via the request body - the setting must be explicitly turned on locally.
+
 **Tool Calling Options:**
 
 | Option | Type | Default | Description |
@@ -523,7 +589,7 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 | `tool_choice` | string | `"auto"` | `"none"`, `"auto"`, or `"required"` |
 | `use_vscode_tools` | boolean | `false` | Include all VS Code registered tools |
 | `tool_execution` | string | `"none"` | `"none"` (pass-through) or `"auto"` (proxy executes) |
-| `max_tool_rounds` | number | `10` | Max iterations in auto mode (0 = unlimited) |
+| `max_tool_rounds` | number | `10` | Max iterations in auto mode (bounded 1-100; out-of-range values return 400) |
 
 See `examples/vscode_llm_tools_auto.py` for a complete auto-execute example.
 
@@ -566,12 +632,15 @@ Settings available in VS Code Settings (search for "Copilot Proxy"):
 | `copilotProxy.port` | `8080` | Port number for the proxy server |
 | `copilotProxy.autoStart` | `true` | Automatically start when VS Code opens |
 | `copilotProxy.defaultModel` | `""` | Default model when not specified in request (leave empty for first available) |
+| `copilotProxy.allowedOrigins` | `[]` | Explicit allowlist of browser origins permitted via CORS (no wildcards; empty = no browser origins allowed) |
+| `copilotProxy.allowAutoToolExecution` | `false` | Gates whether the proxy may auto-execute VS Code tools server-side; clients cannot self-enable this |
 
 ## Commands
 
 - `Copilot Proxy: Start Server` - Start the proxy server
 - `Copilot Proxy: Stop Server` - Stop the proxy server
 - `Copilot Proxy: Show Status` - Open the interactive status panel
+- `Copilot Proxy: Set Proxy Token` (`copilot-proxy.setProxyToken`) - Set the bearer token required to authenticate API requests (stored in VS Code SecretStorage)
 
 ## Limitations
 
@@ -587,27 +656,24 @@ Copilot Proxy is designed for local development use. The following security cons
 
 ### Localhost-Only Binding
 
-The server binds to `127.0.0.1` (localhost) by default. This means:
+The server binds to `127.0.0.1` (localhost) only, and this is not configurable. This means:
 
 - Only applications on your local machine can access the proxy
 - The server is not accessible from other devices on your network
-- This is intentional to prevent unauthorized access
+- There is no setting to bind to `0.0.0.0` or any other interface
 
-### No Authentication
+### Bearer Token Authentication
 
-The API does not require authentication because:
+Every request (except `GET /health`) requires a valid bearer token:
 
-- It's designed for trusted local applications only
-- Your Copilot subscription credentials are managed securely by VS Code
-- Adding authentication would add friction without meaningful security benefit in a localhost context
+- Set the token via Command Palette: `Copilot Proxy: Set Proxy Token`
+- Stored via VS Code's SecretStorage API - never in plaintext settings or files
+- Deny-by-default: if no token has been set, all authenticated requests are rejected with `401`
+- Missing or invalid `Authorization: Bearer <token>` header returns `401 Unauthorized`
 
 ### CORS Configuration
 
-The server allows all origins (`Access-Control-Allow-Origin: *`) because:
-
-- Browser-based local development tools need CORS headers
-- Localhost binding already limits access to local applications
-- Restrictive CORS would break integration with local web tools
+By default, no browser origins are allowed - the server does not send an `Access-Control-Allow-Origin` header unless the requesting origin is explicitly present in `copilotProxy.allowedOrigins` (default: empty array). There is no wildcard support; only exact origin strings you add are ever echoed back.
 
 ### Request Limits
 
@@ -619,11 +685,21 @@ The following limits protect against resource exhaustion:
 | Request timeout | 30 seconds | Prevents connection exhaustion |
 | Keep-alive timeout | 5 seconds | Manages idle connections |
 
+### Logging
+
+Logging is metadata-only by default (and cannot be changed to a raw/verbose mode): request/response logs record message counts, character counts, estimated tokens, and (for tool calls) argument character counts - never raw prompt/response content. Persisted error log entries use a small set of bounded error categories rather than raw exception text or stack traces.
+
+### Tool Execution Gating
+
+- `copilotProxy.allowAutoToolExecution` (default `false`) must be explicitly enabled locally before the proxy will auto-execute VS Code tools on behalf of a client request; clients cannot turn this on themselves via the request body.
+- `max_tool_rounds` is bounded to 1-100; values outside this range return `400 Bad Request`.
+
 ### Best Practices
 
-- Do not expose the proxy to the network (don't modify binding to `0.0.0.0`)
+- Do not expose the proxy to the network (there is no way to modify binding to `0.0.0.0`)
 - Do not run in production environments
 - The proxy is for development and testing only
+- Treat your proxy token like any other local secret; rotate it via `Copilot Proxy: Set Proxy Token` if you suspect it has leaked
 
 ## Troubleshooting
 
