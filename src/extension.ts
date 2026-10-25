@@ -179,7 +179,8 @@ async function refreshModels(): Promise<vscode.LanguageModelChat[]> {
     try {
         // Add timeout to prevent hanging if Copilot isnt ready
         const timeoutMs = 5000;
-        const modelsPromise = vscode.lm.selectChatModels({});
+        // Session-only providers such as copilotcli can expose duplicate IDs but no-op sendRequest.
+        const modelsPromise = vscode.lm.selectChatModels({ vendor: 'copilot' });
         const timeoutPromise = new Promise<vscode.LanguageModelChat[]>((_, reject) =>
             setTimeout(() => reject(new Error('Model refresh timed out')), timeoutMs)
         );
